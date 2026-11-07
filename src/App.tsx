@@ -1,0 +1,176 @@
+import { useEffect, useState } from 'react';
+import {
+  Activity, AlertTriangle, ArrowRight, BarChart3, CheckCircle2, CirclePause, Clock3,
+  Flame, Gauge, Inbox, LayoutDashboard, Loader2, MessageCircle, Pause, Play, Plus,
+  QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Users, X,
+} from 'lucide-react';
+
+type Tab = 'overview' | 'numbers' | 'slots' | 'queue' | 'settings';
+type Profile = 'light' | 'moderate' | 'intensive';
+
+interface WarmNumber {
+  _id: string; name: string; phoneNumber?: string; instanceId: string;
+  connectionState: string; warmupState: string; profile: Profile; slotId?: string;
+  progress: number; sentToday: number; receivedToday: number; successfulSends: number;
+  failedSends: number; lastError?: string; profileName?: string; profilePicUrl?: string;
+}
+interface WarmSlot {
+  _id: string; name: string; profile: Profile; status: string; numberIds: Array<string | WarmNumber>;
+  startedAt?: string;
+}
+interface EventItem { _id: string; title: string; detail?: string; level: string; createdAt: string; type: string; }
+interface Dashboard {
+  metrics: Record<string, number>; numbers: WarmNumber[]; slots: WarmSlot[];
+  events: EventItem[]; queue: Record<string, number>; queuePaused: boolean;
+  profiles: Array<{ id: Profile; label: string; limits: number[] }>;
+}
+interface Config {
+  serverUrl: string; hasAdminToken: boolean; publicBaseUrl: string; queuePaused: boolean;
+  quietStartHour: number; quietEndHour: number; workerConcurrency: number; databaseName: string;
+}
+
+const profileLabel: Record<Profile, string> = { light: 'Leve', moderate: 'Moderado', intensive: 'Intenso controlado' };
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Não foi possível concluir a operação.');
+  return data;
+}
+
+const timeAgo = (value: string) => {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return 'agora';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h`;
+  return `${Math.floor(seconds / 86400)} d`;
+};
+
+function StatusPill({ status }: { status: string }) {
+  const good = ['connected', 'warming', 'ready', 'active', 'completed'].includes(status);
+  const warning = ['connecting', 'draft', 'queued', 'paused', 'processing'].includes(status);
+  return <span className={`pill ${good ? 'pill-good' : warning ? 'pill-warn' : 'pill-bad'}`}><i />{status}</span>;
+}
+
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return <div className="modal-backdrop"><div className="modal"><div className="modal-head"><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={18} /></button></div>{children}</div></div>;
+}
+
+export default function App() {
+  const [tab, setTab] = useState<Tab>('overview');
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [config, setConfig] = useState<Config | null>(null);
+  const [busy, setBusy] = useState('');
+  const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
+  const [numberModal, setNumberModal] = useState(false);
+  const [slotModal, setSlotModal] = useState(false);
+  const [qr, setQr] = useState<{ name: string; value: string } | null>(null);
+  const [queueJobs, setQueueJobs] = useState<any[]>([]);
+
+  const refresh = async () => {
+    const [dash, nextConfig] = await Promise.all([api<Dashboard>('/api/dashboard'), api<Config>('/api/config')]);
+    setDashboard(dash); setConfig(nextConfig);
+  };
+  useEffect(() => {
+    refresh().catch((error) => setNotice({ type: 'error', text: error.message }));
+    const timer = window.setInterval(() => refresh().catch(() => undefined), 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (tab === 'queue') api<any[]>('/api/queue').then(setQueueJobs).catch(() => undefined);
+  }, [tab, dashboard?.queue]);
+
+  const run = async (key: string, task: () => Promise<any>, success?: string) => {
+    setBusy(key); setNotice(null);
+    try { const result = await task(); if (success || result?.message) setNotice({ type: 'ok', text: success || result.message }); await refresh(); return result; }
+    catch (error: any) { setNotice({ type: 'error', text: error.message }); }
+    finally { setBusy(''); }
+  };
+
+  const navigation: Array<{ id: Tab; label: string; icon: any }> = [
+    { id: 'overview', label: 'Visão geral', icon: LayoutDashboard },
+    { id: 'numbers', label: 'Números', icon: Smartphone },
+    { id: 'slots', label: 'Slots', icon: Users },
+    { id: 'queue', label: 'Fila', icon: Inbox },
+    { id: 'settings', label: 'Configurações', icon: Settings },
+  ];
+  const connectedPercent = dashboard?.metrics.totalNumbers ? Math.round((dashboard.metrics.connected / dashboard.metrics.totalNumbers) * 100) : 0;
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><div className="brand-mark"><Flame size={21} /></div><div><strong>WarmFlow</strong><span>Aquecedor WhatsApp</span></div></div>
+      <div className="workspace-badge"><span className="live-dot" />Operação controlada</div>
+      <nav>{navigation.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setTab(item.id)} className={tab === item.id ? 'active' : ''}><Icon size={18} /><span>{item.label}</span>{item.id === 'queue' && dashboard?.metrics.queued ? <b>{dashboard.metrics.queued}</b> : null}</button>; })}</nav>
+      <div className="sidebar-safety"><ShieldCheck size={18} /><div><strong>Ambiente privado</strong><p>Somente números próprios ou autorizados dentro dos slots.</p></div></div>
+      <div className="sidebar-footer"><div className={`queue-state ${dashboard?.queuePaused ? 'paused' : ''}`}><span /><div><strong>Fila {dashboard?.queuePaused ? 'pausada' : 'ativa'}</strong><small>{dashboard?.queuePaused ? 'Nenhum envio automático' : 'Worker processando'}</small></div></div></div>
+    </aside>
+
+    <main>
+      <header className="topbar"><div><p className="eyebrow">OPERAÇÃO / {navigation.find((item) => item.id === tab)?.label.toUpperCase()}</p><h1>{navigation.find((item) => item.id === tab)?.label}</h1></div><div className="top-actions"><button className="secondary-button" onClick={() => refresh()}><RefreshCw size={16} />Atualizar</button><button className="primary-button" onClick={() => setNumberModal(true)}><Plus size={17} />Conectar número</button></div></header>
+      {notice && <div className={`notice ${notice.type}`} onClick={() => setNotice(null)}>{notice.type === 'ok' ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}<span>{notice.text}</span><X size={15} /></div>}
+
+      {!dashboard ? <div className="center-loading"><Loader2 className="spin" /><span>Carregando operação...</span></div> : <div className="content">
+        {tab === 'overview' && <>
+          <section className="hero-card"><div><p className="eyebrow green">PAINEL DE MATURAÇÃO</p><h2>{dashboard.metrics.warming ? `${dashboard.metrics.warming} números em aquecimento` : 'Pronto para iniciar o primeiro slot'}</h2><p>Distribuição gradual, conversas bidirecionais e rastreabilidade em uma fila durável.</p><div className="hero-actions"><button className="primary-button" onClick={() => setSlotModal(true)}><Plus size={16} />Novo slot</button><button className={`secondary-button ${dashboard.queuePaused ? 'attention' : ''}`} onClick={() => run('queue-toggle', () => api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queuePaused: !dashboard.queuePaused }) }), dashboard.queuePaused ? 'Fila liberada.' : 'Fila pausada imediatamente.')}>{busy === 'queue-toggle' ? <Loader2 size={16} className="spin" /> : dashboard.queuePaused ? <Play size={16} /> : <Pause size={16} />}{dashboard.queuePaused ? 'Liberar fila' : 'Pausar fila'}</button></div></div><div className="radial" style={{ '--value': `${connectedPercent * 3.6}deg` } as any}><div><strong>{connectedPercent}%</strong><span>conectados</span></div></div></section>
+          <section className="metric-grid">
+            {[
+              ['Números conectados', dashboard.metrics.connected, Radio, 'green'],
+              ['Em aquecimento', dashboard.metrics.warming, Flame, 'orange'],
+              ['Prontos para uso', dashboard.metrics.ready, CheckCircle2, 'blue'],
+              ['Na fila hoje', dashboard.metrics.queued, Clock3, 'purple'],
+              ['Mensagens enviadas', dashboard.metrics.sentToday, Send, 'green'],
+              ['Mensagens recebidas', dashboard.metrics.receivedToday, MessageCircle, 'blue'],
+            ].map(([label, value, Icon, color]: any) => <article className="metric-card" key={label}><div className={`metric-icon ${color}`}><Icon size={18} /></div><div><span>{label}</span><strong>{value}</strong></div></article>)}
+          </section>
+          <section className="two-columns"><div className="panel"><div className="panel-head"><div><p className="eyebrow">NÚMEROS</p><h3>Progresso do aquecimento</h3></div><button className="text-button" onClick={() => setTab('numbers')}>Ver todos <ArrowRight size={14} /></button></div><div className="number-list">{dashboard.numbers.length ? dashboard.numbers.slice(0, 5).map((number) => <NumberRow key={number._id} number={number} />) : <Empty icon={Smartphone} title="Nenhum número conectado" text="Crie uma instância e escaneie o QR Code." />}</div></div>
+            <div className="panel"><div className="panel-head"><div><p className="eyebrow">ATIVIDADE</p><h3>Eventos recentes</h3></div><Activity size={18} /></div><div className="timeline">{dashboard.events.length ? dashboard.events.map((event) => <div className="event" key={event._id}><span className={event.level} /><div><strong>{event.title}</strong><p>{event.detail || event.type}</p></div><time>{timeAgo(event.createdAt)}</time></div>) : <Empty icon={Activity} title="Sem eventos" text="As conexões e mensagens aparecerão aqui." />}</div></div></section>
+        </>}
+
+        {tab === 'numbers' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">INSTÂNCIAS UAZAPI</p><h3>Números conectados</h3><p className="panel-subtitle">Cada número tem credencial isolada e só conversa com pares do mesmo slot.</p></div><button className="primary-button" onClick={() => setNumberModal(true)}><Plus size={16} />Adicionar</button></div><div className="cards-grid">{dashboard.numbers.map((number) => <article className="number-card" key={number._id}><div className="number-card-head"><div className="avatar">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name.slice(0, 1).toUpperCase()}</div><div><h4>{number.name}</h4><p>{number.phoneNumber || 'Aguardando pareamento'}</p></div><StatusPill status={number.connectionState} /></div><div className="profile-line"><span>{profileLabel[number.profile]}</span><b>{number.progress}%</b></div><div className="progress-track"><i style={{ width: `${number.progress}%` }} /></div><div className="number-stats"><div><span>Enviadas hoje</span><strong>{number.sentToday}</strong></div><div><span>Recebidas hoje</span><strong>{number.receivedToday}</strong></div><div><span>Falhas</span><strong>{number.failedSends}</strong></div></div>{number.lastError && <p className="inline-error">{number.lastError}</p>}<div className="card-actions"><button className="secondary-button" onClick={() => run(`status-${number._id}`, () => api(`/api/numbers/${number._id}/status`), 'Status atualizado.')}>{busy === `status-${number._id}` ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}Status</button>{number.connectionState !== 'connected' && <button className="primary-button" onClick={async () => { const result = await run(`connect-${number._id}`, () => api<any>(`/api/numbers/${number._id}/connect`, { method: 'POST' })); if (result?.qrcode) setQr({ name: number.name, value: result.qrcode }); }}><QrCode size={15} />Gerar QR</button>}</div></article>)}{!dashboard.numbers.length && <Empty icon={Smartphone} title="Nenhuma instância" text="Conecte o primeiro número próprio para começar." />}</div></section>}
+
+        {tab === 'slots' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">ORQUESTRAÇÃO</p><h3>Slots de aquecimento</h3><p className="panel-subtitle">Agrupe dois ou mais números para distribuir mensagens somente entre eles.</p></div><button className="primary-button" onClick={() => setSlotModal(true)}><Plus size={16} />Novo slot</button></div><div className="slot-grid">{dashboard.slots.map((slot) => <SlotCard key={slot._id} slot={slot} numbers={dashboard.numbers} busy={busy} run={run} />)}{!dashboard.slots.length && <Empty icon={Users} title="Nenhum slot criado" text="Crie um slot e adicione pelo menos dois números conectados." />}</div></section>}
+
+        {tab === 'queue' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">FILA DURÁVEL</p><h3>Próximos envios e histórico</h3><p className="panel-subtitle">Jobs persistidos no MongoDB, com idempotência e retry controlado.</p></div><div className="queue-summary"><span><i className="queued" />{dashboard.metrics.queued} aguardando</span><span><i className="failed" />{dashboard.metrics.failed} falhas</span></div></div><div className="table-wrap"><table><thead><tr><th>Horário</th><th>Origem</th><th>Destino</th><th>Mensagem</th><th>Status</th><th>Tentativas</th></tr></thead><tbody>{queueJobs.map((job) => <tr key={job._id}><td>{new Date(job.runAt).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}</td><td>{job.senderNumberId?.name || '—'}</td><td>{job.recipientNumberId?.name || '—'}</td><td className="message-cell">{job.text}</td><td><StatusPill status={job.status} /></td><td>{job.attempts}</td></tr>)}</tbody></table>{!queueJobs.length && <Empty icon={Inbox} title="Fila vazia" text="Os jobs aparecem quando um slot ativo é planejado." />}</div></section>}
+
+        {tab === 'settings' && config && <SettingsPanel config={config} busy={busy} run={run} />}
+      </div>}
+    </main>
+
+    {numberModal && <NumberModal busy={busy} onClose={() => setNumberModal(false)} onCreate={async (payload) => { const result = await run('create-number', () => api<any>('/api/numbers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })); if (result?.qrcode) { setQr({ name: payload.name, value: result.qrcode }); setNumberModal(false); } }} />}
+    {slotModal && <SlotModal busy={busy} onClose={() => setSlotModal(false)} onCreate={async (payload) => { const result = await run('create-slot', () => api('/api/slots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }), 'Slot criado.'); if (result) setSlotModal(false); }} />}
+    {qr && <Modal title={`Conectar ${qr.name}`} onClose={() => setQr(null)}><div className="qr-content"><img src={qr.value.startsWith('data:') ? qr.value : `data:image/png;base64,${qr.value}`} /><h3>Escaneie no WhatsApp</h3><p>Aparelhos conectados → Conectar aparelho. O painel reconhecerá a conexão automaticamente.</p></div></Modal>}
+  </div>;
+}
+
+function NumberRow({ number }: { number: WarmNumber }) {
+  return <div className="number-row"><div className="avatar small">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name[0]}</div><div className="number-main"><div><strong>{number.name}</strong><StatusPill status={number.warmupState} /></div><p>{number.phoneNumber || 'Sem número pareado'} · {profileLabel[number.profile]}</p></div><div className="row-progress"><span>{number.progress}%</span><div><i style={{ width: `${number.progress}%` }} /></div></div></div>;
+}
+
+function Empty({ icon: Icon, title, text }: { icon: any; title: string; text: string }) {
+  return <div className="empty"><Icon size={25} /><strong>{title}</strong><p>{text}</p></div>;
+}
+
+function SlotCard({ slot, numbers, busy, run }: { slot: WarmSlot; numbers: WarmNumber[]; busy: string; run: any }) {
+  const assignedIds = slot.numberIds.map((item) => typeof item === 'string' ? item : item._id);
+  const available = numbers.filter((number) => !assignedIds.includes(number._id));
+  const members = numbers.filter((number) => assignedIds.includes(number._id));
+  const [selected, setSelected] = useState('');
+  return <article className="slot-card"><div className="slot-head"><div className="slot-icon"><Users size={18} /></div><div><h4>{slot.name}</h4><p>{profileLabel[slot.profile]} · {members.length} números</p></div><StatusPill status={slot.status} /></div><div className="member-stack">{members.map((number) => <div className="member" key={number._id}><span>{number.name[0]}</span><div><strong>{number.name}</strong><small>{number.phoneNumber || number.connectionState}</small></div><i className={number.connectionState === 'connected' ? 'online' : ''} /></div>)}{!members.length && <p className="muted">Adicione números ao slot.</p>}</div>{slot.status === 'draft' && <div className="assign-row"><select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">Selecionar número</option>{available.map((number) => <option value={number._id} key={number._id}>{number.name}</option>)}</select><button disabled={!selected || busy === `assign-${slot._id}`} onClick={() => run(`assign-${slot._id}`, () => api(`/api/slots/${slot._id}/assign`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numberId: selected }) }), 'Número adicionado ao slot.').then(() => setSelected(''))}><Plus size={15} /></button></div>}<div className="slot-actions">{slot.status === 'active' ? <button className="secondary-button danger" onClick={() => run(`pause-${slot._id}`, () => api(`/api/slots/${slot._id}/pause`, { method: 'POST' }), 'Slot pausado.')}><CirclePause size={15} />Pausar</button> : <button className="primary-button" disabled={members.length < 2} onClick={() => run(`start-${slot._id}`, () => api(`/api/slots/${slot._id}/start`, { method: 'POST' }))}>{busy === `start-${slot._id}` ? <Loader2 className="spin" size={15} /> : <Play size={15} />}Iniciar aquecimento</button>}</div></article>;
+}
+
+function NumberModal({ busy, onClose, onCreate }: { busy: string; onClose: () => void; onCreate: (payload: any) => void }) {
+  const [name, setName] = useState(''); const [profile, setProfile] = useState<Profile>('light'); const [owned, setOwned] = useState(false);
+  return <Modal title="Conectar novo número" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onCreate({ name, profile, ownedAndAuthorized: owned }); }} className="form"><label>Nome da linha<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Comercial 02" required /></label><div><span className="form-label">Perfil inicial</span><div className="profile-options">{(['light', 'moderate', 'intensive'] as Profile[]).map((item) => <button type="button" className={profile === item ? 'selected' : ''} onClick={() => setProfile(item)} key={item}><Gauge size={16} /><strong>{profileLabel[item]}</strong><small>{item === 'light' ? '4 → 16/dia' : item === 'moderate' ? '6 → 26/dia' : '8 → 36/dia'}</small></button>)}</div></div><label className="check"><input type="checkbox" checked={owned} onChange={(event) => setOwned(event.target.checked)} /><span>Confirmo que este número é próprio ou autorizado e será usado somente com outros números do mesmo ambiente.</span></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={!owned || busy === 'create-number'}>{busy === 'create-number' ? <Loader2 className="spin" size={16} /> : <QrCode size={16} />}Criar e gerar QR</button></div></form></Modal>;
+}
+
+function SlotModal({ busy, onClose, onCreate }: { busy: string; onClose: () => void; onCreate: (payload: any) => void }) {
+  const [name, setName] = useState(''); const [profile, setProfile] = useState<Profile>('light');
+  return <Modal title="Criar slot de aquecimento" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); onCreate({ name, profile }); }}><label>Nome do slot<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Slot Norte 01" required /></label><label>Intensidade<select value={profile} onChange={(event) => setProfile(event.target.value as Profile)}><option value="light">Leve · 4 a 16 mensagens/dia</option><option value="moderate">Moderado · 6 a 26 mensagens/dia</option><option value="intensive">Intenso controlado · 8 a 36 mensagens/dia</option></select></label><div className="info-box"><ShieldCheck size={17} /><p>Um slot só inicia com pelo menos dois números conectados. As mensagens nunca saem para contatos externos.</p></div><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={busy === 'create-slot'}>{busy === 'create-slot' && <Loader2 className="spin" size={16} />}Criar slot</button></div></form></Modal>;
+}
+
+function SettingsPanel({ config, busy, run }: { config: Config; busy: string; run: any }) {
+  const [form, setForm] = useState({ ...config, adminToken: '' });
+  useEffect(() => setForm({ ...config, adminToken: '' }), [config]);
+  const update = (key: string, value: any) => setForm((current) => ({ ...current, [key]: value }));
+  return <div className="settings-grid"><section className="panel"><div className="panel-head"><div><p className="eyebrow">INTEGRAÇÃO</p><h3>Servidor UazAPI</h3></div><Server size={19} /></div><form className="form" onSubmit={(event) => { event.preventDefault(); run('save-config', () => api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) }), 'Configuração salva.'); }}><label>Server URL<input value={form.serverUrl} onChange={(event) => update('serverUrl', event.target.value)} placeholder="https://seu-servidor.uazapi.com" /></label><label>Admin Token<input type="password" value={form.adminToken} onChange={(event) => update('adminToken', event.target.value)} placeholder={config.hasAdminToken ? 'Token salvo — deixe vazio para manter' : 'Cole o admin token'} /></label><label>URL pública do aquecedor<input value={form.publicBaseUrl} onChange={(event) => update('publicBaseUrl', event.target.value)} placeholder="https://aquecedor.seudominio.com" /><small>Webhook: {form.publicBaseUrl ? `${form.publicBaseUrl.replace(/\/$/, '')}/api/webhooks/uazapi` : 'configure uma URL HTTPS'}</small></label><div className="form-actions left"><button type="button" className="secondary-button" onClick={() => run('test-config', () => api('/api/config/test', { method: 'POST' }))}>{busy === 'test-config' ? <Loader2 className="spin" size={16} /> : <Radio size={16} />}Testar servidor</button><button className="primary-button">Salvar integração</button></div></form></section><section className="panel"><div className="panel-head"><div><p className="eyebrow">SEGURANÇA OPERACIONAL</p><h3>Fila e descanso</h3></div><ShieldCheck size={19} /></div><div className="form"><label>Início do descanso<select value={form.quietStartHour} onChange={(event) => update('quietStartHour', Number(event.target.value))}>{Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{String(hour).padStart(2, '0')}:00</option>)}</select></label><label>Fim do descanso<select value={form.quietEndHour} onChange={(event) => update('quietEndHour', Number(event.target.value))}>{Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{String(hour).padStart(2, '0')}:00</option>)}</select></label><label>Concorrência do worker<select value={form.workerConcurrency} onChange={(event) => update('workerConcurrency', Number(event.target.value))}>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} envio{value > 1 ? 's' : ''} simultâneo{value > 1 ? 's' : ''}</option>)}</select></label><div className="database-card"><BarChart3 size={18} /><div><span>Banco dedicado</span><strong>{config.databaseName}</strong></div></div><button className="primary-button" onClick={() => run('save-queue', () => api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quietStartHour: form.quietStartHour, quietEndHour: form.quietEndHour, workerConcurrency: form.workerConcurrency }) }), 'Política da fila atualizada.')}>Salvar política</button></div></section></div>;
+}
