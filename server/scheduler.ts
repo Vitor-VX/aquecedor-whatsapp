@@ -228,6 +228,7 @@ export async function refreshNumberStatus(numberId: string) {
   const instance = result.instance || {};
   const connected = result.status?.connected === true || result.status?.loggedIn === true || instance.status === 'connected';
   number.connectionState = connected ? 'connected' : instance.status || number.connectionState;
+  if (connected) number.lastError = '';
   number.phoneNumber = String(instance.owner || result.status?.jid?.user || number.phoneNumber || '').replace(/\D/g, '') || undefined;
   number.profileName = instance.profileName || number.profileName;
   number.profilePicUrl = instance.profilePicUrl || number.profilePicUrl;
