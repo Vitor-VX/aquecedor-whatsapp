@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { WarmupProfile } from './plans.js';
+import type { WarmupDuration, WarmupProfile } from './plans.js';
 
 export type NumberState = 'disconnected' | 'connecting' | 'connected' | 'hibernated' | 'error';
 export type WarmupState = 'draft' | 'warming' | 'paused' | 'ready' | 'attention';
@@ -37,6 +37,7 @@ export interface WarmupNumberDocument {
   profileName?: string;
   profilePicUrl?: string;
   platform?: string;
+  warmupDays: WarmupDuration;
 }
 
 export interface WarmupSlotDocument {
@@ -46,6 +47,7 @@ export interface WarmupSlotDocument {
   numberIds: mongoose.Types.ObjectId[];
   startedAt?: Date;
   completedAt?: Date;
+  durationDays: WarmupDuration;
 }
 
 export interface WarmupJobDocument {
@@ -97,6 +99,7 @@ const warmupNumberSchema = new Schema<WarmupNumberDocument>({
   profileName: String,
   profilePicUrl: String,
   platform: String,
+  warmupDays: { type: Number, enum: [7, 14, 30], default: 7 },
 }, { timestamps: true, collection: 'warmer_numbers' });
 
 const warmupSlotSchema = new Schema<WarmupSlotDocument>({
@@ -106,6 +109,7 @@ const warmupSlotSchema = new Schema<WarmupSlotDocument>({
   numberIds: [{ type: Schema.Types.ObjectId, ref: 'WarmupNumber' }],
   startedAt: Date,
   completedAt: Date,
+  durationDays: { type: Number, enum: [7, 14, 30], default: 7 },
 }, { timestamps: true, collection: 'warmer_slots' });
 
 const warmupJobSchema = new Schema<WarmupJobDocument>({

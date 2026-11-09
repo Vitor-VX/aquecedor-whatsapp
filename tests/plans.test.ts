@@ -15,6 +15,12 @@ test('o limite diário respeita as extremidades do plano', () => {
   assert.equal(dailyLimit('intensive', 99), 36);
 });
 
+test('cronogramas longos crescem sem ultrapassar o limite do perfil', () => {
+  assert.equal(dayOfPlan(new Date('2026-11-01T00:00:00Z'), new Date('2026-11-20T00:00:00Z'), 30), 20);
+  assert.ok(dailyLimit('light', 1, 30) < dailyLimit('light', 30, 30));
+  assert.equal(dailyLimit('light', 30, 30), 16);
+});
+
 test('calcula o dia do plano sem ultrapassar sete', () => {
   assert.equal(dayOfPlan(new Date('2026-11-01T12:00:00Z'), new Date('2026-11-01T18:00:00Z')), 1);
   assert.equal(dayOfPlan(new Date('2026-11-01T12:00:00Z'), new Date('2026-11-04T18:00:00Z')), 4);

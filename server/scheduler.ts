@@ -40,14 +40,15 @@ export async function ensureJobsForToday() {
   const slots = await WarmupSlot.find({ status: 'active' });
   for (const slot of slots) {
     if (!slot.startedAt) continue;
-    const planDay = dayOfPlan(slot.startedAt, now);
-    const progress = progressPercent(slot.startedAt, now);
+    const durationDays = slot.durationDays || 7;
+    const planDay = dayOfPlan(slot.startedAt, now, durationDays);
+    const progress = progressPercent(slot.startedAt, now, durationDays);
     if (progress >= 100) {
       slot.status = 'ready';
       slot.completedAt = now;
       await slot.save();
       await WarmupNumber.updateMany({ slotId: slot._id }, { $set: { warmupState: 'ready', readyAt: now } });
-      await recordEvent({ type: 'slot_ready', level: 'success', title: `${slot.name} concluiu 7 dias`, slotId: slot._id });
+      await recordEvent({ type: 'slot_ready', level: 'success', title: `${slot.name} concluiu ${durationDays} dias`, slotId: slot._id });
       continue;
     }
 
@@ -64,7 +65,7 @@ export async function ensureJobsForToday() {
 
     for (let senderIndex = 0; senderIndex < numbers.length; senderIndex++) {
       const sender = numbers[senderIndex];
-      const cap = dailyLimit(slot.profile, planDay);
+      const cap = dailyLimit(slot.profile, planDay, durationDays);
       const remaining = Math.max(0, cap - sender.sentToday);
       const times = scheduleTimesForDay(remaining, now, activeStart, activeEnd);
       for (let index = 0; index < remaining; index++) {
@@ -125,8 +126,9 @@ async function processJob() {
     await job.save();
     return;
   }
-  const planDay = dayOfPlan(slot.startedAt || new Date());
-  if (sender.sentToday >= dailyLimit(slot.profile, planDay)) {
+  const durationDays = slot.durationDays || 7;
+  const planDay = dayOfPlan(slot.startedAt || new Date(), new Date(), durationDays);
+  if (sender.sentToday >= dailyLimit(slot.profile, planDay, durationDays)) {
     job.status = 'cancelled';
     job.error = 'Limite diário atingido.';
     job.finishedAt = new Date();

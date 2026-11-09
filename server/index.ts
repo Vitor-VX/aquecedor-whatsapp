@@ -13,7 +13,7 @@ import {
   getOrCreateConfig,
 } from './models.js';
 import { decryptSecret, encryptSecret, secretFingerprint } from './crypto.js';
-import { DAILY_LIMITS, PROFILE_LABELS, progressPercent, type WarmupProfile } from './plans.js';
+import { DAILY_LIMITS, PLAN_DURATIONS, PROFILE_LABELS, normalizeDuration, progressPercent, type WarmupProfile } from './plans.js';
 import { enqueueWebhook, ensureJobsForToday, refreshNumberStatus, startWorkers } from './scheduler.js';
 import { UazapiError, uazapi } from './uazapi.js';
 
@@ -34,7 +34,7 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<unknown>) 
 function safeNumber(document: any) {
   const raw = document?.toObject ? document.toObject() : document;
   const { instanceTokenEncrypted: _token, tokenFingerprint: _fingerprint, ...number } = raw;
-  return { ...number, hasInstanceToken: Boolean(_token), progress: progressPercent(raw.startedAt) };
+  return { ...number, hasInstanceToken: Boolean(_token), warmupDays: raw.warmupDays || 7, progress: progressPercent(raw.startedAt, new Date(), raw.warmupDays || 7) };
 }
 
 app.get('/api/health', asyncRoute(async (_req, res) => {
@@ -107,6 +107,7 @@ app.get('/api/dashboard', asyncRoute(async (_req, res) => {
     events,
     queuePaused: config.queuePaused,
     profiles: Object.entries(PROFILE_LABELS).map(([id, label]) => ({ id, label, limits: DAILY_LIMITS[id as WarmupProfile] })),
+    durations: PLAN_DURATIONS,
   });
 }));
 
@@ -133,6 +134,7 @@ app.post('/api/numbers', asyncRoute(async (req, res) => {
     tokenFingerprint: secretFingerprint(String(instance.token)),
     connectionState: instance.status || 'disconnected',
     warmupState: 'draft',
+    warmupDays: 7,
     dailyCounterDate: new Date().toISOString().slice(0, 10),
   });
   const connection = await uazapi.connect(String(instance.token));
@@ -160,6 +162,19 @@ app.get('/api/numbers/:id/status', asyncRoute(async (req, res) => {
   res.json({ success: true, number: safeNumber(result.number), instance: result.instance, status: result.status });
 }));
 
+app.patch('/api/numbers/:id', asyncRoute(async (req, res) => {
+  const number = await WarmupNumber.findById(req.params.id);
+  if (!number) return res.status(404).json({ error: 'Número não encontrado.' });
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Informe um nome válido para a linha.' });
+    number.name = name;
+  }
+  if (req.body.profile !== undefined && isProfile(req.body.profile)) number.profile = req.body.profile;
+  await number.save();
+  res.json({ success: true, number: safeNumber(number), message: 'Número atualizado.' });
+}));
+
 app.post('/api/numbers/:id/connect', asyncRoute(async (req, res) => {
   const number = await WarmupNumber.findById(req.params.id);
   if (!number) return res.status(404).json({ error: 'Número não encontrado.' });
@@ -178,9 +193,25 @@ app.get('/api/slots', asyncRoute(async (_req, res) => {
 app.post('/api/slots', asyncRoute(async (req, res) => {
   const name = String(req.body.name || '').trim();
   const profile = isProfile(req.body.profile) ? req.body.profile : 'light';
+  const durationDays = normalizeDuration(req.body.durationDays);
   if (!name) return res.status(400).json({ error: 'Informe o nome do slot.' });
-  const slot = await WarmupSlot.create({ name, profile, status: 'draft', numberIds: [] });
+  const slot = await WarmupSlot.create({ name, profile, durationDays, status: 'draft', numberIds: [] });
   res.json({ success: true, slot });
+}));
+
+app.patch('/api/slots/:id', asyncRoute(async (req, res) => {
+  const slot = await WarmupSlot.findById(req.params.id);
+  if (!slot) return res.status(404).json({ error: 'Slot não encontrado.' });
+  if (slot.status === 'active') return res.status(409).json({ error: 'Pause o slot antes de editar o cronograma.' });
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Informe um nome válido para o slot.' });
+    slot.name = name;
+  }
+  if (req.body.profile !== undefined && isProfile(req.body.profile)) slot.profile = req.body.profile;
+  if (req.body.durationDays !== undefined) slot.durationDays = normalizeDuration(req.body.durationDays);
+  await slot.save();
+  res.json({ success: true, slot, message: 'Slot atualizado.' });
 }));
 
 app.post('/api/slots/:id/assign', asyncRoute(async (req, res) => {
@@ -202,10 +233,12 @@ app.post('/api/slots/:id/start', asyncRoute(async (req, res) => {
   if (!slot) return res.status(404).json({ error: 'Slot não encontrado.' });
   const connected = await WarmupNumber.countDocuments({ _id: { $in: slot.numberIds }, connectionState: 'connected' });
   if (connected < 2) return res.status(409).json({ error: 'Conecte pelo menos dois números próprios no slot.' });
+  const durationDays = slot.durationDays || 7;
+  slot.durationDays = durationDays;
   slot.status = 'active';
   slot.startedAt ||= new Date();
   await slot.save();
-  await WarmupNumber.updateMany({ _id: { $in: slot.numberIds } }, { $set: { warmupState: 'warming', startedAt: slot.startedAt, profile: slot.profile } });
+  await WarmupNumber.updateMany({ _id: { $in: slot.numberIds } }, { $set: { warmupState: 'warming', startedAt: slot.startedAt, profile: slot.profile, warmupDays: durationDays } });
   await WarmupEvent.create({ type: 'slot_started', level: 'success', title: `${slot.name} iniciado`, slotId: slot._id });
   await ensureJobsForToday();
   res.json({ success: true, message: 'Aquecimento iniciado e fila diária planejada.' });

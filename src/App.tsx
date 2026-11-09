@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
-  Activity, AlertTriangle, ArrowRight, BarChart3, CheckCircle2, CirclePause, Clock3,
+  Activity, AlertTriangle, ArrowRight, BarChart3, CalendarDays, CheckCircle2, CirclePause, Clock3,
   Flame, Gauge, Inbox, LayoutDashboard, Loader2, MessageCircle, Pause, Play, Plus,
-  QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Users, X,
+  Pencil, QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Users, X,
 } from 'lucide-react';
 
 type Tab = 'overview' | 'numbers' | 'slots' | 'queue' | 'settings';
@@ -13,16 +13,19 @@ interface WarmNumber {
   connectionState: string; warmupState: string; profile: Profile; slotId?: string;
   progress: number; sentToday: number; receivedToday: number; successfulSends: number;
   failedSends: number; lastError?: string; profileName?: string; profilePicUrl?: string;
+  warmupDays: 7 | 14 | 30;
 }
 interface WarmSlot {
   _id: string; name: string; profile: Profile; status: string; numberIds: Array<string | WarmNumber>;
   startedAt?: string;
+  durationDays: 7 | 14 | 30;
 }
 interface EventItem { _id: string; title: string; detail?: string; level: string; createdAt: string; type: string; }
 interface Dashboard {
   metrics: Record<string, number>; numbers: WarmNumber[]; slots: WarmSlot[];
   events: EventItem[]; queue: Record<string, number>; queuePaused: boolean;
   profiles: Array<{ id: Profile; label: string; limits: number[] }>;
+  durations: number[];
 }
 interface Config {
   serverUrl: string; hasAdminToken: boolean; publicBaseUrl: string; queuePaused: boolean;
@@ -30,6 +33,18 @@ interface Config {
 }
 
 const profileLabel: Record<Profile, string> = { light: 'Leve', moderate: 'Moderado', intensive: 'Intenso controlado' };
+
+const formatPhone = (value?: string) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return 'Sem número pareado';
+  if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) {
+    const area = digits.slice(2, 4);
+    const local = digits.slice(4);
+    const split = local.length === 9 ? `${local.slice(0, 5)}-${local.slice(5)}` : `${local.slice(0, 4)}-${local.slice(4)}`;
+    return `+55 (${area}) ${split}`;
+  }
+  return `+${digits}`;
+};
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -64,6 +79,8 @@ export default function App() {
   const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [numberModal, setNumberModal] = useState(false);
   const [slotModal, setSlotModal] = useState(false);
+  const [editNumber, setEditNumber] = useState<WarmNumber | null>(null);
+  const [editSlot, setEditSlot] = useState<WarmSlot | null>(null);
   const [qr, setQr] = useState<{ name: string; value: string } | null>(null);
   const [queueJobs, setQueueJobs] = useState<any[]>([]);
 
@@ -126,9 +143,9 @@ export default function App() {
             <div className="panel"><div className="panel-head"><div><p className="eyebrow">ATIVIDADE</p><h3>Eventos recentes</h3></div><Activity size={18} /></div><div className="timeline">{dashboard.events.length ? dashboard.events.map((event) => <div className="event" key={event._id}><span className={event.level} /><div><strong>{event.title}</strong><p>{event.detail || event.type}</p></div><time>{timeAgo(event.createdAt)}</time></div>) : <Empty icon={Activity} title="Sem eventos" text="As conexões e mensagens aparecerão aqui." />}</div></div></section>
         </>}
 
-        {tab === 'numbers' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">INSTÂNCIAS UAZAPI</p><h3>Números conectados</h3><p className="panel-subtitle">Cada número tem credencial isolada e só conversa com pares do mesmo slot.</p></div><button className="primary-button" onClick={() => setNumberModal(true)}><Plus size={16} />Adicionar</button></div><div className="cards-grid">{dashboard.numbers.map((number) => <article className="number-card" key={number._id}><div className="number-card-head"><div className="avatar">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name.slice(0, 1).toUpperCase()}</div><div><h4>{number.name}</h4><p>{number.phoneNumber || 'Aguardando pareamento'}</p></div><StatusPill status={number.connectionState} /></div><div className="profile-line"><span>{profileLabel[number.profile]}</span><b>{number.progress}%</b></div><div className="progress-track"><i style={{ width: `${number.progress}%` }} /></div><div className="number-stats"><div><span>Enviadas hoje</span><strong>{number.sentToday}</strong></div><div><span>Recebidas hoje</span><strong>{number.receivedToday}</strong></div><div><span>Falhas</span><strong>{number.failedSends}</strong></div></div>{number.lastError && <p className="inline-error">{number.lastError}</p>}<div className="card-actions"><button className="secondary-button" onClick={() => run(`status-${number._id}`, () => api(`/api/numbers/${number._id}/status`), 'Status atualizado.')}>{busy === `status-${number._id}` ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}Status</button>{number.connectionState !== 'connected' && <button className="primary-button" onClick={async () => { const result = await run(`connect-${number._id}`, () => api<any>(`/api/numbers/${number._id}/connect`, { method: 'POST' })); if (result?.qrcode) setQr({ name: number.name, value: result.qrcode }); }}><QrCode size={15} />Gerar QR</button>}</div></article>)}{!dashboard.numbers.length && <Empty icon={Smartphone} title="Nenhuma instância" text="Conecte o primeiro número próprio para começar." />}</div></section>}
+        {tab === 'numbers' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">INSTÂNCIAS UAZAPI</p><h3>Números conectados</h3><p className="panel-subtitle">Cada número tem credencial isolada e só conversa com pares do mesmo slot.</p></div><button className="primary-button" onClick={() => setNumberModal(true)}><Plus size={16} />Adicionar</button></div><div className="cards-grid">{dashboard.numbers.map((number) => <article className="number-card" key={number._id}><div className="number-card-head"><div className="avatar">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name.slice(0, 1).toUpperCase()}</div><div><h4>{number.name}</h4><p>{formatPhone(number.phoneNumber)}</p></div><StatusPill status={number.connectionState} /></div><div className="profile-line"><span>{profileLabel[number.profile]} · {number.warmupDays} dias</span><b>{number.progress}%</b></div><div className="progress-track"><i style={{ width: `${number.progress}%` }} /></div><div className="number-stats"><div><span>Enviadas hoje</span><strong>{number.sentToday}</strong></div><div><span>Recebidas hoje</span><strong>{number.receivedToday}</strong></div><div><span>Falhas</span><strong>{number.failedSends}</strong></div></div>{number.lastError && <p className="inline-error">{number.lastError}</p>}<div className="card-actions"><button className="icon-button" title="Editar nome" onClick={() => setEditNumber(number)}><Pencil size={15} /></button><button className="secondary-button" onClick={() => run(`status-${number._id}`, () => api(`/api/numbers/${number._id}/status`), 'Status atualizado.')}>{busy === `status-${number._id}` ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}Status</button>{number.connectionState !== 'connected' && <button className="primary-button" onClick={async () => { const result = await run(`connect-${number._id}`, () => api<any>(`/api/numbers/${number._id}/connect`, { method: 'POST' })); if (result?.qrcode) setQr({ name: number.name, value: result.qrcode }); }}><QrCode size={15} />Gerar QR</button>}</div></article>)}{!dashboard.numbers.length && <Empty icon={Smartphone} title="Nenhuma instância" text="Conecte o primeiro número próprio para começar." />}</div></section>}
 
-        {tab === 'slots' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">ORQUESTRAÇÃO</p><h3>Slots de aquecimento</h3><p className="panel-subtitle">Agrupe dois ou mais números para distribuir mensagens somente entre eles.</p></div><button className="primary-button" onClick={() => setSlotModal(true)}><Plus size={16} />Novo slot</button></div><div className="slot-grid">{dashboard.slots.map((slot) => <SlotCard key={slot._id} slot={slot} numbers={dashboard.numbers} busy={busy} run={run} />)}{!dashboard.slots.length && <Empty icon={Users} title="Nenhum slot criado" text="Crie um slot e adicione pelo menos dois números conectados." />}</div></section>}
+        {tab === 'slots' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">ORQUESTRAÇÃO</p><h3>Slots de aquecimento</h3><p className="panel-subtitle">Agrupe dois ou mais números para distribuir mensagens somente entre eles.</p></div><button className="primary-button" onClick={() => setSlotModal(true)}><Plus size={16} />Novo slot</button></div><div className="slot-grid">{dashboard.slots.map((slot) => <SlotCard key={slot._id} slot={slot} numbers={dashboard.numbers} busy={busy} run={run} onEdit={setEditSlot} />)}{!dashboard.slots.length && <Empty icon={Users} title="Nenhum slot criado" text="Crie um slot e adicione pelo menos dois números conectados." />}</div></section>}
 
         {tab === 'queue' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">FILA DURÁVEL</p><h3>Próximos envios e histórico</h3><p className="panel-subtitle">Jobs persistidos no MongoDB, com idempotência e retry controlado.</p></div><div className="queue-summary"><span><i className="queued" />{dashboard.metrics.queued} aguardando</span><span><i className="failed" />{dashboard.metrics.failed} falhas</span></div></div><div className="table-wrap"><table><thead><tr><th>Horário</th><th>Origem</th><th>Destino</th><th>Mensagem</th><th>Status</th><th>Tentativas</th></tr></thead><tbody>{queueJobs.map((job) => <tr key={job._id}><td>{new Date(job.runAt).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}</td><td>{job.senderNumberId?.name || '—'}</td><td>{job.recipientNumberId?.name || '—'}</td><td className="message-cell">{job.text}</td><td><StatusPill status={job.status} /></td><td>{job.attempts}</td></tr>)}</tbody></table>{!queueJobs.length && <Empty icon={Inbox} title="Fila vazia" text="Os jobs aparecem quando um slot ativo é planejado." />}</div></section>}
 
@@ -138,24 +155,26 @@ export default function App() {
 
     {numberModal && <NumberModal busy={busy} onClose={() => setNumberModal(false)} onCreate={async (payload) => { const result = await run('create-number', () => api<any>('/api/numbers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })); if (result?.qrcode) { setQr({ name: payload.name, value: result.qrcode }); setNumberModal(false); } }} />}
     {slotModal && <SlotModal busy={busy} onClose={() => setSlotModal(false)} onCreate={async (payload) => { const result = await run('create-slot', () => api('/api/slots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }), 'Slot criado.'); if (result) setSlotModal(false); }} />}
+    {editNumber && <EditNumberModal number={editNumber} busy={busy} onClose={() => setEditNumber(null)} onSave={async (payload) => { const result = await run(`edit-number-${editNumber._id}`, () => api(`/api/numbers/${editNumber._id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }), 'Número atualizado.'); if (result) setEditNumber(null); }} />}
+    {editSlot && <EditSlotModal slot={editSlot} busy={busy} onClose={() => setEditSlot(null)} onSave={async (payload) => { const result = await run(`edit-slot-${editSlot._id}`, () => api(`/api/slots/${editSlot._id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }), 'Slot atualizado.'); if (result) setEditSlot(null); }} />}
     {qr && <Modal title={`Conectar ${qr.name}`} onClose={() => setQr(null)}><div className="qr-content"><img src={qr.value.startsWith('data:') ? qr.value : `data:image/png;base64,${qr.value}`} /><h3>Escaneie no WhatsApp</h3><p>Aparelhos conectados → Conectar aparelho. O painel reconhecerá a conexão automaticamente.</p></div></Modal>}
   </div>;
 }
 
 function NumberRow({ number }: { number: WarmNumber }) {
-  return <div className="number-row"><div className="avatar small">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name[0]}</div><div className="number-main"><div><strong>{number.name}</strong><StatusPill status={number.warmupState} /></div><p>{number.phoneNumber || 'Sem número pareado'} · {profileLabel[number.profile]}</p></div><div className="row-progress"><span>{number.progress}%</span><div><i style={{ width: `${number.progress}%` }} /></div></div></div>;
+  return <div className="number-row"><div className="avatar small">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name[0]}</div><div className="number-main"><div><strong>{number.name}</strong><StatusPill status={number.warmupState} /></div><p>{formatPhone(number.phoneNumber)} · {profileLabel[number.profile]} · {number.warmupDays} dias</p></div><div className="row-progress"><span>{number.progress}%</span><div><i style={{ width: `${number.progress}%` }} /></div></div></div>;
 }
 
 function Empty({ icon: Icon, title, text }: { icon: any; title: string; text: string }) {
   return <div className="empty"><Icon size={25} /><strong>{title}</strong><p>{text}</p></div>;
 }
 
-function SlotCard({ slot, numbers, busy, run }: { slot: WarmSlot; numbers: WarmNumber[]; busy: string; run: any }) {
+function SlotCard({ slot, numbers, busy, run, onEdit }: { slot: WarmSlot; numbers: WarmNumber[]; busy: string; run: any; onEdit: (slot: WarmSlot) => void }) {
   const assignedIds = slot.numberIds.map((item) => typeof item === 'string' ? item : item._id);
   const available = numbers.filter((number) => !assignedIds.includes(number._id));
   const members = numbers.filter((number) => assignedIds.includes(number._id));
   const [selected, setSelected] = useState('');
-  return <article className="slot-card"><div className="slot-head"><div className="slot-icon"><Users size={18} /></div><div><h4>{slot.name}</h4><p>{profileLabel[slot.profile]} · {members.length} números</p></div><StatusPill status={slot.status} /></div><div className="member-stack">{members.map((number) => <div className="member" key={number._id}><span>{number.name[0]}</span><div><strong>{number.name}</strong><small>{number.phoneNumber || number.connectionState}</small></div><i className={number.connectionState === 'connected' ? 'online' : ''} /></div>)}{!members.length && <p className="muted">Adicione números ao slot.</p>}</div>{slot.status === 'draft' && <div className="assign-row"><select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">Selecionar número</option>{available.map((number) => <option value={number._id} key={number._id}>{number.name}</option>)}</select><button disabled={!selected || busy === `assign-${slot._id}`} onClick={() => run(`assign-${slot._id}`, () => api(`/api/slots/${slot._id}/assign`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numberId: selected }) }), 'Número adicionado ao slot.').then(() => setSelected(''))}><Plus size={15} /></button></div>}<div className="slot-actions">{slot.status === 'active' ? <button className="secondary-button danger" onClick={() => run(`pause-${slot._id}`, () => api(`/api/slots/${slot._id}/pause`, { method: 'POST' }), 'Slot pausado.')}><CirclePause size={15} />Pausar</button> : <button className="primary-button" disabled={members.length < 2} onClick={() => run(`start-${slot._id}`, () => api(`/api/slots/${slot._id}/start`, { method: 'POST' }))}>{busy === `start-${slot._id}` ? <Loader2 className="spin" size={15} /> : <Play size={15} />}Iniciar aquecimento</button>}</div></article>;
+  return <article className="slot-card"><div className="slot-head"><div className="slot-icon"><Users size={18} /></div><div><h4>{slot.name}</h4><p>{profileLabel[slot.profile]} · {slot.durationDays} dias · {members.length} números</p></div><button className="icon-button" title="Editar slot" onClick={() => onEdit(slot)}><Pencil size={15} /></button><StatusPill status={slot.status} /></div><div className="member-stack">{members.map((number) => <div className="member" key={number._id}><span>{number.name[0]}</span><div><strong>{number.name}</strong><small>{formatPhone(number.phoneNumber) || number.connectionState}</small></div><i className={number.connectionState === 'connected' ? 'online' : ''} /></div>)}{!members.length && <p className="muted">Adicione números ao slot.</p>}</div>{slot.status === 'draft' && <div className="assign-row"><select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">Selecionar número</option>{available.map((number) => <option value={number._id} key={number._id}>{number.name}</option>)}</select><button disabled={!selected || busy === `assign-${slot._id}`} onClick={() => run(`assign-${slot._id}`, () => api(`/api/slots/${slot._id}/assign`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numberId: selected }) }), 'Número adicionado ao slot.').then(() => setSelected(''))}><Plus size={15} /></button></div>}<div className="slot-actions">{slot.status === 'active' ? <button className="secondary-button danger" onClick={() => run(`pause-${slot._id}`, () => api(`/api/slots/${slot._id}/pause`, { method: 'POST' }), 'Slot pausado.')}><CirclePause size={15} />Pausar</button> : <button className="primary-button" disabled={members.length < 2} onClick={() => run(`start-${slot._id}`, () => api(`/api/slots/${slot._id}/start`, { method: 'POST' }))}>{busy === `start-${slot._id}` ? <Loader2 className="spin" size={15} /> : <Play size={15} />}Iniciar aquecimento</button>}</div></article>;
 }
 
 function NumberModal({ busy, onClose, onCreate }: { busy: string; onClose: () => void; onCreate: (payload: any) => void }) {
@@ -164,8 +183,18 @@ function NumberModal({ busy, onClose, onCreate }: { busy: string; onClose: () =>
 }
 
 function SlotModal({ busy, onClose, onCreate }: { busy: string; onClose: () => void; onCreate: (payload: any) => void }) {
-  const [name, setName] = useState(''); const [profile, setProfile] = useState<Profile>('light');
-  return <Modal title="Criar slot de aquecimento" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); onCreate({ name, profile }); }}><label>Nome do slot<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Slot Norte 01" required /></label><label>Intensidade<select value={profile} onChange={(event) => setProfile(event.target.value as Profile)}><option value="light">Leve · 4 a 16 mensagens/dia</option><option value="moderate">Moderado · 6 a 26 mensagens/dia</option><option value="intensive">Intenso controlado · 8 a 36 mensagens/dia</option></select></label><div className="info-box"><ShieldCheck size={17} /><p>Um slot só inicia com pelo menos dois números conectados. As mensagens nunca saem para contatos externos.</p></div><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={busy === 'create-slot'}>{busy === 'create-slot' && <Loader2 className="spin" size={16} />}Criar slot</button></div></form></Modal>;
+  const [name, setName] = useState(''); const [profile, setProfile] = useState<Profile>('light'); const [durationDays, setDurationDays] = useState(7);
+  return <Modal title="Criar slot de aquecimento" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); onCreate({ name, profile, durationDays }); }}><label>Nome do slot<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Slot Norte 01" required /></label><label>Intensidade<select value={profile} onChange={(event) => setProfile(event.target.value as Profile)}><option value="light">Leve · crescimento gradual</option><option value="moderate">Moderado · ritmo intermediário</option><option value="intensive">Intenso controlado · limite maior</option></select></label><label><span className="form-label">Cronograma</span><select value={durationDays} onChange={(event) => setDurationDays(Number(event.target.value))}><option value={7}>7 dias · recomendado</option><option value={14}>14 dias · gradual</option><option value={30}>30 dias · conservador</option></select><small>O limite diário cresce ao longo do período escolhido.</small></label><div className="info-box"><CalendarDays size={17} /><p>O slot começa com dois números conectados e distribui conversas somente entre os membros.</p></div><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={busy === 'create-slot'}>{busy === 'create-slot' && <Loader2 className="spin" size={16} />}Criar slot</button></div></form></Modal>;
+}
+
+function EditNumberModal({ number, busy, onClose, onSave }: { number: WarmNumber; busy: string; onClose: () => void; onSave: (payload: any) => void }) {
+  const [name, setName] = useState(number.name);
+  return <Modal title="Editar número" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); onSave({ name }); }}><label>Nome exibido<input value={name} onChange={(event) => setName(event.target.value)} required /></label><div className="info-box"><Smartphone size={17} /><p>O telefone real é controlado pela UazAPI e não é alterado manualmente. Aqui você edita o nome usado no painel.</p></div><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={busy === `edit-number-${number._id}`}>{busy === `edit-number-${number._id}` && <Loader2 className="spin" size={16} />}Salvar</button></div></form></Modal>;
+}
+
+function EditSlotModal({ slot, busy, onClose, onSave }: { slot: WarmSlot; busy: string; onClose: () => void; onSave: (payload: any) => void }) {
+  const [name, setName] = useState(slot.name); const [profile, setProfile] = useState<Profile>(slot.profile); const [durationDays, setDurationDays] = useState<7 | 14 | 30>(slot.durationDays || 7);
+  return <Modal title="Editar slot" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); onSave({ name, profile, durationDays }); }}><label>Nome do slot<input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Intensidade<select value={profile} onChange={(event) => setProfile(event.target.value as Profile)}><option value="light">Leve · crescimento gradual</option><option value="moderate">Moderado · ritmo intermediário</option><option value="intensive">Intenso controlado · limite maior</option></select></label><label>Cronograma<select value={durationDays} onChange={(event) => setDurationDays(Number(event.target.value) as 7 | 14 | 30)}><option value={7}>7 dias · recomendado</option><option value={14}>14 dias · gradual</option><option value={30}>30 dias · conservador</option></select></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={busy === `edit-slot-${slot._id}`}>{busy === `edit-slot-${slot._id}` && <Loader2 className="spin" size={16} />}Salvar alterações</button></div></form></Modal>;
 }
 
 function SettingsPanel({ config, busy, run }: { config: Config; busy: string; run: any }) {

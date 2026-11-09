@@ -1,4 +1,6 @@
 export type WarmupProfile = 'light' | 'moderate' | 'intensive';
+export const PLAN_DURATIONS = [7, 14, 30] as const;
+export type WarmupDuration = (typeof PLAN_DURATIONS)[number];
 
 export const PROFILE_LABELS: Record<WarmupProfile, string> = {
   light: 'Leve',
@@ -25,23 +27,34 @@ export const MESSAGE_TEMPLATES = [
   'Até mais! Depois a gente se fala.',
 ];
 
-export function dayOfPlan(startedAt: Date, now = new Date()): number {
+export function normalizeDuration(value: unknown): WarmupDuration {
+  const days = Number(value);
+  return PLAN_DURATIONS.includes(days as WarmupDuration) ? days as WarmupDuration : 7;
+}
+
+export function dayOfPlan(startedAt: Date, now = new Date(), durationDays: number = 7): number {
   const start = new Date(startedAt);
   start.setHours(0, 0, 0, 0);
   const current = new Date(now);
   current.setHours(0, 0, 0, 0);
-  return Math.max(1, Math.min(7, Math.floor((current.getTime() - start.getTime()) / 86_400_000) + 1));
+  return Math.max(1, Math.min(normalizeDuration(durationDays), Math.floor((current.getTime() - start.getTime()) / 86_400_000) + 1));
 }
 
-export function dailyLimit(profile: WarmupProfile, day: number): number {
+export function dailyLimit(profile: WarmupProfile, day: number, durationDays: number = 7): number {
   const limits = DAILY_LIMITS[profile];
-  return limits[Math.max(0, Math.min(6, day - 1))];
+  const duration = normalizeDuration(durationDays);
+  if (duration === 7) return limits[Math.max(0, Math.min(6, day - 1))];
+  const start = limits[0];
+  const end = limits[limits.length - 1];
+  const fraction = Math.max(0, Math.min(1, (day - 1) / (duration - 1)));
+  return Math.round(start + ((end - start) * fraction));
 }
 
-export function progressPercent(startedAt?: Date | string | null, now = new Date()): number {
+export function progressPercent(startedAt?: Date | string | null, now = new Date(), durationDays: number = 7): number {
   if (!startedAt) return 0;
+  const duration = normalizeDuration(durationDays);
   const startMs = new Date(startedAt).getTime();
-  return Math.max(0, Math.min(100, Math.round(((now.getTime() - startMs) / (7 * 86_400_000)) * 100)));
+  return Math.max(0, Math.min(100, Math.round(((now.getTime() - startMs) / (duration * 86_400_000)) * 100)));
 }
 
 export function isWithinQuietHours(hour: number, startHour: number, endHour: number): boolean {
