@@ -177,6 +177,25 @@ app.patch('/api/numbers/:id', asyncRoute(async (req, res) => {
   res.json({ success: true, number: safeNumber(number), message: 'Número atualizado.' });
 }));
 
+app.delete('/api/numbers/:id', asyncRoute(async (req, res) => {
+  const number = await WarmupNumber.findById(req.params.id);
+  if (!number) return res.status(404).json({ error: 'Número não encontrado.' });
+  if (number.slotId) {
+    const slot = await WarmupSlot.findById(number.slotId).select('name status');
+    if (slot?.status === 'active') return res.status(409).json({ error: `Pause o slot "${slot.name}" antes de remover este número.` });
+  }
+  await Promise.all([
+    WarmupSlot.updateMany({}, { $pull: { numberIds: number._id } }),
+    WarmupJob.updateMany(
+      { $or: [{ senderNumberId: number._id }, { recipientNumberId: number._id }], status: { $in: ['queued', 'processing'] } },
+      { $set: { status: 'cancelled', error: 'Número removido do aquecedor.' } },
+    ),
+    WarmupEvent.create({ type: 'number_deleted', level: 'warning', title: `${number.name} removido`, numberId: number._id }),
+  ]);
+  await number.deleteOne();
+  res.json({ success: true, message: 'Número removido do aquecedor. A instância UazAPI continua disponível para exclusão manual no servidor.' });
+}));
+
 app.post('/api/numbers/:id/connect', asyncRoute(async (req, res) => {
   const number = await WarmupNumber.findById(req.params.id);
   if (!number) return res.status(404).json({ error: 'Número não encontrado.' });
@@ -255,12 +274,43 @@ app.post('/api/slots/:id/pause', asyncRoute(async (req, res) => {
   res.json({ success: true });
 }));
 
+app.delete('/api/slots/:id', asyncRoute(async (req, res) => {
+  const slot = await WarmupSlot.findById(req.params.id);
+  if (!slot) return res.status(404).json({ error: 'Slot não encontrado.' });
+  if (slot.status === 'active') return res.status(409).json({ error: 'Pause o slot antes de removê-lo.' });
+  await Promise.all([
+    WarmupNumber.updateMany({ slotId: slot._id }, { $unset: { slotId: 1 }, $set: { warmupState: 'draft' } }),
+    WarmupJob.updateMany({ slotId: slot._id, status: { $in: ['queued', 'processing'] } }, { $set: { status: 'cancelled', error: 'Slot removido.' } }),
+    WarmupEvent.create({ type: 'slot_deleted', level: 'warning', title: `${slot.name} removido`, slotId: slot._id }),
+  ]);
+  await slot.deleteOne();
+  res.json({ success: true, message: 'Slot removido e números liberados.' });
+}));
+
+app.get('/api/slots/:id/agenda', asyncRoute(async (req, res) => {
+  const slot = await WarmupSlot.findById(req.params.id).select('name profile status durationDays startedAt numberIds');
+  if (!slot) return res.status(404).json({ error: 'Slot não encontrado.' });
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 100)));
+  const jobs = await WarmupJob.find({ slotId: slot._id })
+    .sort({ runAt: 1 })
+    .limit(limit)
+    .populate('senderNumberId', 'name phoneNumber')
+    .populate('recipientNumberId', 'name phoneNumber')
+    .lean();
+  res.json({ slot, items: jobs, total: await WarmupJob.countDocuments({ slotId: slot._id }) });
+}));
+
 app.get('/api/queue', asyncRoute(async (req, res) => {
   const status = String(req.query.status || '');
   const query: Record<string, unknown> = {};
   if (status) query.status = status;
-  const jobs = await WarmupJob.find(query).sort({ runAt: -1 }).limit(100).populate('senderNumberId', 'name').populate('recipientNumberId', 'name').lean();
-  res.json(jobs);
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  const [jobs, total] = await Promise.all([
+    WarmupJob.find(query).sort({ runAt: -1 }).skip(offset).limit(limit).populate('senderNumberId', 'name').populate('recipientNumberId', 'name').lean(),
+    WarmupJob.countDocuments(query),
+  ]);
+  res.json({ items: jobs, total, offset, limit, hasMore: offset + jobs.length < total });
 }));
 
 app.get('/api/events', asyncRoute(async (_req, res) => {
