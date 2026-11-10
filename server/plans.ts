@@ -57,6 +57,31 @@ export function progressPercent(startedAt?: Date | string | null, now = new Date
   return Math.max(0, Math.min(100, Math.round(((now.getTime() - startMs) / (duration * 86_400_000)) * 100)));
 }
 
+export function healthScore(input: {
+  connectionState?: string;
+  progress?: number;
+  sentToday?: number;
+  receivedToday?: number;
+  successfulSends?: number;
+  failedSends?: number;
+  lastError?: string;
+}): number {
+  const totalAttempts = Math.max(0, Number(input.successfulSends || 0) + Number(input.failedSends || 0));
+  const failureRate = totalAttempts ? Number(input.failedSends || 0) / totalAttempts : 0;
+  const connection = input.connectionState === 'connected' ? 55 : input.connectionState === 'connecting' ? 30 : 12;
+  const progress = Math.min(20, Math.max(0, Number(input.progress || 0) * 0.2));
+  const activity = Math.min(16, Number(input.receivedToday || 0) * 2) + Math.min(10, Number(input.sentToday || 0));
+  const penalty = Math.min(28, failureRate * 45) + (input.lastError ? 8 : 0);
+  return Math.max(0, Math.min(100, Math.round(connection + progress + activity - penalty)));
+}
+
+export function healthLabel(score: number): string {
+  if (score >= 85) return 'Saudável';
+  if (score >= 70) return 'Estável';
+  if (score >= 50) return 'Atenção';
+  return 'Crítico';
+}
+
 export function isWithinQuietHours(hour: number, startHour: number, endHour: number): boolean {
   if (startHour === endHour) return false;
   if (startHour < endHour) return hour >= startHour && hour < endHour;

@@ -13,7 +13,7 @@ import {
   getOrCreateConfig,
 } from './models.js';
 import { decryptSecret, encryptSecret, secretFingerprint } from './crypto.js';
-import { DAILY_LIMITS, PLAN_DURATIONS, PROFILE_LABELS, normalizeDuration, progressPercent, type WarmupProfile } from './plans.js';
+import { DAILY_LIMITS, PLAN_DURATIONS, PROFILE_LABELS, healthLabel, healthScore, normalizeDuration, progressPercent, type WarmupProfile } from './plans.js';
 import { enqueueWebhook, ensureJobsForToday, refreshNumberStatus, startWorkers } from './scheduler.js';
 import { UazapiError, uazapi } from './uazapi.js';
 
@@ -34,7 +34,9 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<unknown>) 
 function safeNumber(document: any) {
   const raw = document?.toObject ? document.toObject() : document;
   const { instanceTokenEncrypted: _token, tokenFingerprint: _fingerprint, ...number } = raw;
-  return { ...number, hasInstanceToken: Boolean(_token), warmupDays: raw.warmupDays || 7, progress: progressPercent(raw.startedAt, new Date(), raw.warmupDays || 7) };
+  const progress = progressPercent(raw.startedAt, new Date(), raw.warmupDays || 7);
+  const score = healthScore({ ...raw, progress });
+  return { ...number, hasInstanceToken: Boolean(_token), warmupDays: raw.warmupDays || 7, progress, healthScore: score, healthLabel: healthLabel(score) };
 }
 
 app.get('/api/health', asyncRoute(async (_req, res) => {

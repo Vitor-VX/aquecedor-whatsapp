@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, ArrowRight, BarChart3, CalendarDays, CheckCircle2, CirclePause, Clock3,
-  Flame, Gauge, Inbox, LayoutDashboard, Loader2, MessageCircle, Pause, Play, Plus,
+  Flame, Gauge, Github, Inbox, LayoutDashboard, Loader2, MessageCircle, Pause, Play, Plus,
   Pencil, QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Users, X,
 } from 'lucide-react';
 
@@ -14,6 +14,7 @@ interface WarmNumber {
   progress: number; sentToday: number; receivedToday: number; successfulSends: number;
   failedSends: number; lastError?: string; profileName?: string; profilePicUrl?: string;
   warmupDays: 7 | 14 | 30;
+  healthScore: number; healthLabel: string;
 }
 interface WarmSlot {
   _id: string; name: string; profile: Profile; status: string; numberIds: Array<string | WarmNumber>;
@@ -112,13 +113,14 @@ export default function App() {
     { id: 'settings', label: 'Configurações', icon: Settings },
   ];
   const connectedPercent = dashboard?.metrics.totalNumbers ? Math.round((dashboard.metrics.connected / dashboard.metrics.totalNumbers) * 100) : 0;
+  const averageHealth = dashboard?.numbers.length ? Math.round(dashboard.numbers.reduce((sum, number) => sum + number.healthScore, 0) / dashboard.numbers.length) : 0;
 
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Flame size={21} /></div><div><strong>WarmFlow</strong><span>Aquecedor WhatsApp</span></div></div>
       <div className="workspace-badge"><span className="live-dot" />Operação controlada</div>
       <nav>{navigation.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => setTab(item.id)} className={tab === item.id ? 'active' : ''}><Icon size={18} /><span>{item.label}</span>{item.id === 'queue' && dashboard?.metrics.queued ? <b>{dashboard.metrics.queued}</b> : null}</button>; })}</nav>
-      <div className="sidebar-safety"><ShieldCheck size={18} /><div><strong>Ambiente privado</strong><p>Somente números próprios ou autorizados dentro dos slots.</p></div></div>
+      <a className="sidebar-safety developer-link" href="https://github.com/Vitor-VX" target="_blank" rel="noreferrer"><Github size={18} /><div><strong>Desenvolvido por Vitor VX</strong><p>Projeto open source no GitHub</p></div><ArrowRight size={14} /></a>
       <div className="sidebar-footer"><div className={`queue-state ${dashboard?.queuePaused ? 'paused' : ''}`}><span /><div><strong>Fila {dashboard?.queuePaused ? 'pausada' : 'ativa'}</strong><small>{dashboard?.queuePaused ? 'Nenhum envio automático' : 'Worker processando'}</small></div></div></div>
     </aside>
 
@@ -137,6 +139,7 @@ export default function App() {
               ['Na fila hoje', dashboard.metrics.queued, Clock3, 'purple'],
               ['Mensagens enviadas', dashboard.metrics.sentToday, Send, 'green'],
               ['Mensagens recebidas', dashboard.metrics.receivedToday, MessageCircle, 'blue'],
+              ['Saúde média', averageHealth, Activity, 'purple'],
             ].map(([label, value, Icon, color]: any) => <article className="metric-card" key={label}><div className={`metric-icon ${color}`}><Icon size={18} /></div><div><span>{label}</span><strong>{value}</strong></div></article>)}
           </section>
           <section className="two-columns"><div className="panel"><div className="panel-head"><div><p className="eyebrow">NÚMEROS</p><h3>Progresso do aquecimento</h3></div><button className="text-button" onClick={() => setTab('numbers')}>Ver todos <ArrowRight size={14} /></button></div><div className="number-list">{dashboard.numbers.length ? dashboard.numbers.slice(0, 5).map((number) => <NumberRow key={number._id} number={number} />) : <Empty icon={Smartphone} title="Nenhum número conectado" text="Crie uma instância e escaneie o QR Code." />}</div></div>
@@ -162,7 +165,7 @@ export default function App() {
 }
 
 function NumberRow({ number }: { number: WarmNumber }) {
-  return <div className="number-row"><div className="avatar small">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name[0]}</div><div className="number-main"><div><strong>{number.name}</strong><StatusPill status={number.warmupState} /></div><p>{formatPhone(number.phoneNumber)} · {profileLabel[number.profile]} · {number.warmupDays} dias</p></div><div className="row-progress"><span>{number.progress}%</span><div><i style={{ width: `${number.progress}%` }} /></div></div></div>;
+  return <div className="number-row"><div className="avatar small">{number.profilePicUrl ? <img src={number.profilePicUrl} /> : number.name[0]}</div><div className="number-main"><div><strong>{number.name}</strong><StatusPill status={number.warmupState} /></div><p>{formatPhone(number.phoneNumber)} · {profileLabel[number.profile]} · {number.warmupDays} dias · Saúde {number.healthScore}/100</p></div><div className="row-progress"><span>{number.progress}%</span><div><i style={{ width: `${number.progress}%` }} /></div></div></div>;
 }
 
 function Empty({ icon: Icon, title, text }: { icon: any; title: string; text: string }) {

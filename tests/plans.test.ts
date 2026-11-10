@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DAILY_LIMITS, dailyLimit, dayOfPlan, isWithinQuietHours, progressPercent } from '../server/plans.js';
+import { DAILY_LIMITS, dailyLimit, dayOfPlan, healthLabel, healthScore, isWithinQuietHours, progressPercent } from '../server/plans.js';
 
 test('os perfis crescem gradualmente durante sete dias', () => {
   for (const limits of Object.values(DAILY_LIMITS)) {
@@ -38,4 +38,11 @@ test('progresso fica sempre entre zero e cem', () => {
   assert.equal(progressPercent(undefined, now), 0);
   assert.equal(progressPercent('2026-11-01T00:00:00Z', now), 100);
   assert.equal(progressPercent('2026-12-01T00:00:00Z', now), 0);
+});
+
+test('score operacional penaliza falhas e reconhece conexão saudável', () => {
+  const healthy = healthScore({ connectionState: 'connected', progress: 80, sentToday: 8, receivedToday: 4, successfulSends: 12, failedSends: 0 });
+  const failing = healthScore({ connectionState: 'connected', progress: 80, sentToday: 8, receivedToday: 0, successfulSends: 2, failedSends: 8, lastError: 'falha' });
+  assert.ok(healthy > failing);
+  assert.equal(healthLabel(healthy), 'Saudável');
 });
