@@ -78,7 +78,7 @@ export function healthScore(input: {
 export function healthLabel(score: number): string {
   if (score >= 85) return 'Saudável';
   if (score >= 70) return 'Estável';
-  if (score >= 50) return 'Atenção';
+  if (score >= 35) return 'Atenção';
   return 'Crítico';
 }
 
