@@ -10,7 +10,8 @@ import {
   getOrCreateConfig,
 } from './models.js';
 import { secretFingerprint } from './crypto.js';
-import { MESSAGE_TEMPLATES, dailyLimit, dayOfPlan, progressPercent, scheduleTimesForDay } from './plans.js';
+import { MESSAGE_TEMPLATES, dailyLimit, dayOfPlan, progressPercent, scheduleTimesForPlanDay } from './plans.js';
+import { publishWarmupJob, rabbitConfigured, startRabbitConsumer } from './rabbitmq.js';
 import { UazapiError, uazapi } from './uazapi.js';
 
 const dateKey = (date = new Date()) => date.toISOString().slice(0, 10);
@@ -67,11 +68,11 @@ export async function ensureJobsForToday() {
       const sender = numbers[senderIndex];
       const cap = dailyLimit(slot.profile, planDay, durationDays);
       const remaining = Math.max(0, cap - sender.sentToday);
-      const times = scheduleTimesForDay(remaining, now, activeStart, activeEnd);
+      const times = scheduleTimesForPlanDay(remaining, slot.startedAt, planDay, activeStart, activeEnd, now);
       for (let index = 0; index < remaining; index++) {
         const recipient = numbers[(senderIndex + index + 1) % numbers.length];
         if (recipient._id.equals(sender._id)) continue;
-        const idempotencyKey = `${dateKey(now)}:${slot._id}:${sender._id}:${index}`;
+        const idempotencyKey = `${slot._id}:day-${planDay}:${sender._id}:${index}`;
         await WarmupJob.updateOne(
           { idempotencyKey },
           {
@@ -94,18 +95,20 @@ export async function ensureJobsForToday() {
   }
 }
 
-async function claimJob() {
+async function claimJob(jobId?: string) {
+  const filter: Record<string, unknown> = { status: 'queued', runAt: { $lte: new Date() } };
+  if (jobId) filter._id = jobId;
   return WarmupJob.findOneAndUpdate(
-    { status: 'queued', runAt: { $lte: new Date() } },
-    { $set: { status: 'processing', lockedAt: new Date() }, $inc: { attempts: 1 } },
+    filter,
+    { $set: { status: 'processing', lockedAt: new Date() }, $unset: { queueDispatchedAt: 1 }, $inc: { attempts: 1 } },
     { returnDocument: 'after', sort: { runAt: 1 } },
   );
 }
 
-async function processJob() {
+async function processJob(jobId?: string) {
   const config = await getOrCreateConfig();
   if (config.queuePaused) return;
-  const job = await claimJob();
+  const job = await claimJob(jobId);
   if (!job) return;
   const [slot, sender, recipient] = await Promise.all([
     WarmupSlot.findById(job.slotId),
@@ -123,6 +126,7 @@ async function processJob() {
     job.status = 'queued';
     job.runAt = new Date(Date.now() + 15 * 60_000);
     job.error = 'Aguardando conexão e telefone do par.';
+    job.queueDispatchedAt = undefined;
     await job.save();
     return;
   }
@@ -163,6 +167,7 @@ async function processJob() {
       job.status = 'queued';
       job.runAt = new Date(Date.now() + (waitSeconds * 1000) + crypto.randomInt(1_000, 10_000));
       job.error = error.message;
+      job.queueDispatchedAt = undefined;
     } else {
       job.status = 'failed';
       job.error = error.message;
@@ -171,6 +176,26 @@ async function processJob() {
     }
     await job.save();
     await recordEvent({ type: 'message_failed', level: uncertain ? 'warning' : 'error', title: `Falha em ${sender.name}`, detail: error.message, numberId: sender._id, slotId: slot._id });
+  }
+}
+
+async function dispatchDueJobs() {
+  if (!rabbitConfigured()) return;
+  const jobs = await WarmupJob.find({
+    status: 'queued',
+    runAt: { $lte: new Date() },
+    $or: [{ queueDispatchedAt: { $exists: false } }, { queueDispatchedAt: null }],
+  }).select('_id').sort({ runAt: 1 }).limit(20).lean();
+  for (const job of jobs) {
+    const dispatchedAt = new Date();
+    const reserved = await WarmupJob.updateOne(
+      { _id: job._id, status: 'queued', $or: [{ queueDispatchedAt: { $exists: false } }, { queueDispatchedAt: null }] },
+      { $set: { queueDispatchedAt: dispatchedAt } },
+    );
+    if (!reserved.modifiedCount) continue;
+    if (!await publishWarmupJob(String(job._id))) {
+      await WarmupJob.updateOne({ _id: job._id, status: 'queued' }, { $unset: { queueDispatchedAt: 1 } });
+    }
   }
 }
 
@@ -248,6 +273,7 @@ export function startWorkers() {
       const config = await AppConfig.findOne({ key: 'main' });
       const concurrency = Math.max(1, Math.min(5, config?.workerConcurrency || 2));
       await Promise.all([
+        dispatchDueJobs(),
         ...Array.from({ length: concurrency }, () => processJob()),
         processWebhookInbox(),
       ]);
@@ -257,6 +283,11 @@ export function startWorkers() {
       running = false;
     }
   };
+  if (rabbitConfigured()) {
+    void startRabbitConsumer((jobId) => processJob(jobId)).then((connected) => {
+      if (connected) console.log('[RabbitMQ] consumidor do aquecedor ativo');
+    });
+  }
   void ensureJobsForToday();
   const workerTimer = setInterval(tick, 5_000);
   const plannerTimer = setInterval(() => void ensureJobsForToday(), 60_000);

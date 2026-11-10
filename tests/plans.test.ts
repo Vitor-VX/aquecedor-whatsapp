@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DAILY_LIMITS, dailyLimit, dayOfPlan, healthLabel, healthScore, isWithinQuietHours, progressPercent } from '../server/plans.js';
+import { DAILY_LIMITS, dailyLimit, dayOfPlan, healthLabel, healthScore, isWithinQuietHours, progressPercent, scheduleTimesForPlanDay } from '../server/plans.js';
 
 test('os perfis crescem gradualmente durante sete dias', () => {
   for (const limits of Object.values(DAILY_LIMITS)) {
@@ -25,6 +25,14 @@ test('calcula o dia do plano sem ultrapassar sete', () => {
   assert.equal(dayOfPlan(new Date('2026-11-01T12:00:00Z'), new Date('2026-11-01T18:00:00Z')), 1);
   assert.equal(dayOfPlan(new Date('2026-11-01T12:00:00Z'), new Date('2026-11-04T18:00:00Z')), 4);
   assert.equal(dayOfPlan(new Date('2026-10-01T12:00:00Z'), new Date('2026-11-04T18:00:00Z')), 7);
+  assert.equal(dayOfPlan(new Date('2026-11-01T19:00:00Z'), new Date('2026-11-02T00:01:00Z')), 1);
+  assert.equal(dayOfPlan(new Date('2026-11-01T19:00:00Z'), new Date('2026-11-02T19:00:00Z')), 2);
+});
+
+test('agenda respeita o início exato do plano', () => {
+  const start = new Date('2026-11-01T19:00:00Z');
+  const times = scheduleTimesForPlanDay(4, start, 1, 8, 22, start);
+  assert.ok(times.every((time) => time >= start && time < new Date('2026-11-02T19:00:00Z')));
 });
 
 test('reconhece descanso que atravessa a meia-noite', () => {

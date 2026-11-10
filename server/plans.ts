@@ -1,4 +1,4 @@
-export type WarmupProfile = 'light' | 'moderate' | 'intensive';
+export type WarmupProfile = 'light' | 'moderate' | 'intensive' | 'aggressive';
 export const PLAN_DURATIONS = [7, 14, 30] as const;
 export type WarmupDuration = (typeof PLAN_DURATIONS)[number];
 
@@ -6,12 +6,14 @@ export const PROFILE_LABELS: Record<WarmupProfile, string> = {
   light: 'Leve',
   moderate: 'Moderado',
   intensive: 'Intenso controlado',
+  aggressive: 'Agressivo controlado',
 };
 
 export const DAILY_LIMITS: Record<WarmupProfile, number[]> = {
   light: [4, 6, 8, 10, 12, 14, 16],
   moderate: [6, 9, 12, 15, 18, 22, 26],
   intensive: [8, 12, 16, 20, 24, 30, 36],
+  aggressive: [12, 18, 24, 30, 36, 42, 48],
 };
 
 export const MESSAGE_TEMPLATES = [
@@ -34,10 +36,8 @@ export function normalizeDuration(value: unknown): WarmupDuration {
 
 export function dayOfPlan(startedAt: Date, now = new Date(), durationDays: number = 7): number {
   const start = new Date(startedAt);
-  start.setHours(0, 0, 0, 0);
-  const current = new Date(now);
-  current.setHours(0, 0, 0, 0);
-  return Math.max(1, Math.min(normalizeDuration(durationDays), Math.floor((current.getTime() - start.getTime()) / 86_400_000) + 1));
+  const elapsed = new Date(now).getTime() - start.getTime();
+  return Math.max(1, Math.min(normalizeDuration(durationDays), Math.floor(elapsed / 86_400_000) + 1));
 }
 
 export function dailyLimit(profile: WarmupProfile, day: number, durationDays: number = 7): number {
@@ -100,4 +100,28 @@ export function scheduleTimesForDay(count: number, date: Date, activeStartHour: 
     const jitter = (Math.random() - 0.5) * Math.min(range / count / 2, 20 * 60_000);
     return new Date(Math.max(Date.now() + 5_000, center + jitter));
   }).sort((a, b) => a.getTime() - b.getTime());
+}
+
+export function scheduleTimesForPlanDay(
+  count: number,
+  planStartedAt: Date,
+  planDay: number,
+  activeStartHour: number,
+  activeEndHour: number,
+  now = new Date(),
+): Date[] {
+  if (count <= 0) return [];
+  const dayStart = new Date(new Date(planStartedAt).getTime() + ((Math.max(1, planDay) - 1) * 86_400_000));
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+  const floor = Math.max(dayStart.getTime(), now.getTime() + 5_000);
+  const candidates: Date[] = [];
+  for (let timestamp = dayStart.getTime(); timestamp < dayEnd.getTime(); timestamp += 15 * 60_000) {
+    const candidate = new Date(timestamp + 7 * 60_000);
+    const hour = candidate.getHours();
+    const active = activeStartHour === activeEndHour
+      || (activeStartHour < activeEndHour ? hour >= activeStartHour && hour < activeEndHour : hour >= activeStartHour || hour < activeEndHour);
+    if (active && candidate.getTime() >= floor && candidate.getTime() < dayEnd.getTime()) candidates.push(candidate);
+  }
+  if (!candidates.length) return [new Date(Math.max(floor, dayStart.getTime()))];
+  return Array.from({ length: count }, (_, index) => candidates[Math.min(candidates.length - 1, Math.floor(((index + 0.5) * candidates.length) / count))]);
 }

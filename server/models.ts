@@ -61,6 +61,7 @@ export interface WarmupJobDocument {
   status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'uncertain';
   attempts: number;
   lockedAt?: Date;
+  queueDispatchedAt?: Date;
   finishedAt?: Date;
   providerMessageId?: string;
   error?: string;
@@ -123,6 +124,7 @@ const warmupJobSchema = new Schema<WarmupJobDocument>({
   status: { type: String, default: 'queued', index: true },
   attempts: { type: Number, default: 0 },
   lockedAt: Date,
+  queueDispatchedAt: Date,
   finishedAt: Date,
   providerMessageId: String,
   error: String,

@@ -11,10 +11,10 @@ Painel independente para aquecimento controlado de números próprios ou autoriz
 - Edição do nome exibido de cada número.
 - Slots privados com dois ou mais números conectados.
 - Edição do nome, perfil e cronograma dos slots enquanto não estão ativos.
-- Perfis de aquecimento: **Leve**, **Moderado** e **Intenso controlado**.
+- Perfis de aquecimento: **Leve**, **Moderado**, **Intenso controlado** e **Agressivo controlado**.
 - Cronogramas de **7 dias (recomendado)**, **14 dias** ou **30 dias**.
 - Crescimento gradual do limite diário conforme o cronograma escolhido.
-- Fila durável em MongoDB, idempotência diária, concorrência limitada e retries controlados.
+- Fila durável em MongoDB, com integração opcional RabbitMQ, idempotência por dia do plano, concorrência limitada e retries controlados.
 - Pausa global, pausa por slot e horário de descanso.
 - Webhook assíncrono para conexão, mensagens recebidas e métricas.
 
@@ -31,7 +31,7 @@ Express + TypeScript (API e worker)
        │       ├── UazAPI (instâncias e envios)
        │       └── MongoDB / banco AquecedorWhatsApp
        │
-       └── fila durable: warmer_jobs
+       └── fila durable: warmer_jobs → RabbitMQ (opcional)
 ~~~
 
 Coleções principais: warmer_config, warmer_numbers, warmer_slots, warmer_jobs, warmer_events e warmer_webhook_inbox.
@@ -80,6 +80,9 @@ Veja .env.example. As principais são:
 | UAZAPI_SERVER_URL | URL do servidor UazAPI |
 | UAZAPI_ADMIN_TOKEN | Admin token da UazAPI |
 | INSTANCE_TOKEN_ENCRYPTION_KEY | Segredo com pelo menos 32 caracteres |
+| RABBITMQ_URL | URL AMQP opcional; habilita o consumidor RabbitMQ |
+| RABBITMQ_QUEUE | Nome da fila AMQP, padrão `aquecedor.jobs` |
+| RABBITMQ_PREFETCH | Quantidade de mensagens pré-carregadas por consumidor |
 
 Nunca coloque tokens, senhas, URI privada ou .env no Git. O .gitignore já exclui esses arquivos.
 
@@ -91,7 +94,7 @@ Nunca coloque tokens, senhas, URI privada ou .env no Git. O .gitignore já exclu
 4. Repita para pelo menos dois números conectados.
 5. Crie um slot, escolha o perfil e selecione 7, 14 ou 30 dias.
 6. Adicione os números ao slot e inicie o aquecimento.
-7. Libere a fila global e acompanhe a evolução no dashboard.
+7. Libere a fila global e acompanhe a evolução no dashboard. O Dia 1 começa exatamente no instante em que o slot é iniciado; cada dia tem 24 horas.
 
 Um slot ativo não pode ter o cronograma alterado. Pause o slot antes de editar seu nome, perfil ou duração.
 
@@ -108,6 +111,8 @@ Um slot ativo não pode ter o cronograma alterado. Pause o slot antes de editar 
 - POST /api/slots/:id/assign — adiciona número ao slot.
 - POST /api/slots/:id/start — inicia o cronograma.
 - POST /api/slots/:id/pause — pausa o cronograma.
+- GET /api/slots/:id/agenda — roadmap diário com horários e mensagens previstas.
+- GET /api/queue?limit=10&offset=0 — fila paginada para o painel.
 - POST /api/webhooks/uazapi — recebe eventos da UazAPI.
 
 ## Deploy com Git + PM2

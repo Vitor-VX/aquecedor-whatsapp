@@ -13,8 +13,9 @@ import {
   getOrCreateConfig,
 } from './models.js';
 import { decryptSecret, encryptSecret, secretFingerprint } from './crypto.js';
-import { DAILY_LIMITS, PLAN_DURATIONS, PROFILE_LABELS, healthLabel, healthScore, normalizeDuration, progressPercent, type WarmupProfile } from './plans.js';
+import { DAILY_LIMITS, MESSAGE_TEMPLATES, PLAN_DURATIONS, PROFILE_LABELS, dailyLimit, healthLabel, healthScore, normalizeDuration, progressPercent, scheduleTimesForPlanDay, type WarmupProfile } from './plans.js';
 import { enqueueWebhook, ensureJobsForToday, refreshNumberStatus, startWorkers } from './scheduler.js';
+import { rabbitConfigured } from './rabbitmq.js';
 import { UazapiError, uazapi } from './uazapi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +25,7 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
 
-const isProfile = (value: unknown): value is WarmupProfile => ['light', 'moderate', 'intensive'].includes(String(value));
+const isProfile = (value: unknown): value is WarmupProfile => ['light', 'moderate', 'intensive', 'aggressive'].includes(String(value));
 const normalizeOrigin = (value: string) => value.trim().replace(/\/$/, '');
 
 function asyncRoute(handler: (req: Request, res: Response) => Promise<unknown>) {
@@ -59,6 +60,7 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
     quietStartHour: config.quietStartHour,
     quietEndHour: config.quietEndHour,
     workerConcurrency: config.workerConcurrency,
+    rabbitMqEnabled: rabbitConfigured(),
     databaseName: 'AquecedorWhatsApp',
   });
 }));
@@ -120,7 +122,6 @@ app.get('/api/numbers', asyncRoute(async (_req, res) => {
 
 app.post('/api/numbers', asyncRoute(async (req, res) => {
   const name = String(req.body.name || '').trim();
-  const profile = isProfile(req.body.profile) ? req.body.profile : 'light';
   if (!name) return res.status(400).json({ error: 'Informe o nome da linha.' });
   if (req.body.ownedAndAuthorized !== true) {
     return res.status(400).json({ error: 'Confirme que o número é próprio ou autorizado para este teste.' });
@@ -130,7 +131,6 @@ app.post('/api/numbers', asyncRoute(async (req, res) => {
   if (!instance.id || !instance.token) throw new Error('A UazAPI não retornou ID e token da instância.');
   const number = await WarmupNumber.create({
     name,
-    profile,
     instanceId: String(instance.id),
     instanceTokenEncrypted: encryptSecret(String(instance.token)),
     tokenFingerprint: secretFingerprint(String(instance.token)),
@@ -291,13 +291,50 @@ app.get('/api/slots/:id/agenda', asyncRoute(async (req, res) => {
   const slot = await WarmupSlot.findById(req.params.id).select('name profile status durationDays startedAt numberIds');
   if (!slot) return res.status(404).json({ error: 'Slot não encontrado.' });
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 100)));
-  const jobs = await WarmupJob.find({ slotId: slot._id })
+  const [jobs, numbers, config] = await Promise.all([
+    WarmupJob.find({ slotId: slot._id })
     .sort({ runAt: 1 })
     .limit(limit)
     .populate('senderNumberId', 'name phoneNumber')
     .populate('recipientNumberId', 'name phoneNumber')
-    .lean();
-  res.json({ slot, items: jobs, total: await WarmupJob.countDocuments({ slotId: slot._id }) });
+    .lean(),
+    WarmupNumber.find({ _id: { $in: slot.numberIds } }).select('name phoneNumber').lean(),
+    getOrCreateConfig(),
+  ]);
+  const durationDays = slot.durationDays || 7;
+  const planStartedAt = slot.startedAt || new Date();
+  const now = new Date();
+  const days = Array.from({ length: durationDays }, (_, dayIndex) => {
+    const day = dayIndex + 1;
+    const dayStart = new Date(new Date(planStartedAt).getTime() + (dayIndex * 86_400_000));
+    const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+    const dayNow = now >= dayStart && now < dayEnd ? now : dayStart;
+    const plannedMessages: Array<{ sender: any; recipient: any; text: string; runAt: string }> = [];
+    const cap = dailyLimit(slot.profile, day, durationDays);
+    numbers.forEach((sender, senderIndex) => {
+      const senderTimes = scheduleTimesForPlanDay(cap, planStartedAt, day, config.quietEndHour, config.quietStartHour, dayNow);
+      for (let index = 0; index < cap; index += 1) {
+        const recipient = numbers[(senderIndex + index + 1) % numbers.length];
+        if (!recipient || recipient._id.equals(sender._id)) continue;
+        plannedMessages.push({
+          sender: { _id: sender._id, name: sender.name, phoneNumber: sender.phoneNumber },
+          recipient: { _id: recipient._id, name: recipient.name, phoneNumber: recipient.phoneNumber },
+          text: MESSAGE_TEMPLATES[(senderIndex + index + day) % MESSAGE_TEMPLATES.length],
+          runAt: senderTimes[index]?.toISOString() || dayStart.toISOString(),
+        });
+      }
+    });
+    return {
+      day,
+      date: dayStart.toISOString(),
+      endDate: dayEnd.toISOString(),
+      status: now >= dayEnd ? 'completed' : now >= dayStart ? 'current' : 'upcoming',
+      limitPerNumber: cap,
+      totalMessages: plannedMessages.length,
+      messages: plannedMessages,
+    };
+  });
+  res.json({ slot, days, items: jobs, total: await WarmupJob.countDocuments({ slotId: slot._id }) });
 }));
 
 app.get('/api/queue', asyncRoute(async (req, res) => {
