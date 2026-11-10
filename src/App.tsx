@@ -4,7 +4,6 @@ import {
   Flame, Gauge, Inbox, LayoutDashboard, Loader2, MessageCircle, Pause, Play, Plus,
   Pencil, QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Users, X,
 } from 'lucide-react';
-import LandingPage from './LandingPage.js';
 
 type Tab = 'overview' | 'numbers' | 'slots' | 'queue' | 'settings';
 type Profile = 'light' | 'moderate' | 'intensive';
@@ -73,7 +72,6 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 }
 
 export default function App() {
-  const isLanding = window.location.pathname === '/';
   const [tab, setTab] = useState<Tab>('overview');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
@@ -91,15 +89,13 @@ export default function App() {
     setDashboard(dash); setConfig(nextConfig);
   };
   useEffect(() => {
-    if (isLanding) return;
     refresh().catch((error) => setNotice({ type: 'error', text: error.message }));
     const timer = window.setInterval(() => refresh().catch(() => undefined), 5_000);
     return () => window.clearInterval(timer);
-  }, [isLanding]);
+  }, []);
   useEffect(() => {
-    if (isLanding) return;
     if (tab === 'queue') api<any[]>('/api/queue').then(setQueueJobs).catch(() => undefined);
-  }, [isLanding, tab, dashboard?.queue]);
+  }, [tab, dashboard?.queue]);
 
   const run = async (key: string, task: () => Promise<any>, success?: string) => {
     setBusy(key); setNotice(null);
@@ -115,7 +111,6 @@ export default function App() {
     { id: 'queue', label: 'Fila', icon: Inbox },
     { id: 'settings', label: 'Configurações', icon: Settings },
   ];
-  if (isLanding) return <LandingPage />;
   const connectedPercent = dashboard?.metrics.totalNumbers ? Math.round((dashboard.metrics.connected / dashboard.metrics.totalNumbers) * 100) : 0;
 
   return <div className="app-shell">
