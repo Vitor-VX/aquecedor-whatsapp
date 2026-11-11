@@ -1,5 +1,6 @@
 import { decryptSecret } from './crypto.js';
 import { getOrCreateConfig, type WarmupNumberDocument } from './models.js';
+import type { WarmupActionKind } from './plans.js';
 
 export class UazapiError extends Error {
   constructor(message: string, public status: number, public body: unknown, public retryAfter?: number) {
@@ -66,5 +67,10 @@ export const uazapi = {
     method: 'POST',
     token: decryptSecret(number.instanceTokenEncrypted),
     body: JSON.stringify({ number: destination, text, track_source: 'warmflow' }),
+  }),
+  sendMedia: (number: Pick<WarmupNumberDocument, 'instanceTokenEncrypted'>, destination: string, kind: Exclude<WarmupActionKind, 'text'>, file: string, caption = '') => request<any>('/send/media', {
+    method: 'POST',
+    token: decryptSecret(number.instanceTokenEncrypted),
+    body: JSON.stringify({ number: destination, type: kind, file, text: caption, track_source: 'warmflow' }),
   }),
 };

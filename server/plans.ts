@@ -1,4 +1,5 @@
 export type WarmupProfile = 'light' | 'moderate' | 'intensive' | 'aggressive';
+export type WarmupActionKind = 'text' | 'audio' | 'image' | 'video' | 'sticker';
 export const PLAN_DURATIONS = [7, 14, 30] as const;
 export type WarmupDuration = (typeof PLAN_DURATIONS)[number];
 
@@ -28,6 +29,42 @@ export const MESSAGE_TEMPLATES = [
   'Só confirmando que está tudo online.',
   'Até mais! Depois a gente se fala.',
 ];
+
+type ActionWeight = { kind: WarmupActionKind; weight: number };
+const ACTION_MIX: Record<'early' | 'middle' | 'late', ActionWeight[]> = {
+  early: [
+    { kind: 'text', weight: 90 },
+    { kind: 'sticker', weight: 10 },
+  ],
+  middle: [
+    { kind: 'text', weight: 65 },
+    { kind: 'audio', weight: 15 },
+    { kind: 'image', weight: 8 },
+    { kind: 'video', weight: 5 },
+    { kind: 'sticker', weight: 7 },
+  ],
+  late: [
+    { kind: 'text', weight: 55 },
+    { kind: 'audio', weight: 20 },
+    { kind: 'image', weight: 10 },
+    { kind: 'video', weight: 7 },
+    { kind: 'sticker', weight: 8 },
+  ],
+};
+
+export function actionKindForDay(day: number, index: number, available: WarmupActionKind[]): WarmupActionKind {
+  if (!available.length) return 'text';
+  const phase = day <= 2 ? 'early' : day <= 5 ? 'middle' : 'late';
+  const allowed = ACTION_MIX[phase].filter((item) => available.includes(item.kind));
+  if (!allowed.length) return available[0];
+  const total = allowed.reduce((sum, item) => sum + item.weight, 0);
+  let cursor = (index * 37 + day * 13) % total;
+  for (const item of allowed) {
+    cursor -= item.weight;
+    if (cursor < 0) return item.kind;
+  }
+  return allowed[allowed.length - 1].kind;
+}
 
 export function normalizeDuration(value: unknown): WarmupDuration {
   const days = Number(value);

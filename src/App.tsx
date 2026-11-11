@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
   Activity, AlertTriangle, ArrowRight, BarChart3, CalendarDays, CheckCircle2, CirclePause, Clock3,
-  Flame, Github, Inbox, LayoutDashboard, Loader2, MessageCircle, Pause, Play, Plus,
-  Pencil, QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Trash2, Users, X,
+  Flame, Github, Inbox, LayoutDashboard, Library, Loader2, MessageCircle, Pause, Play, Plus,
+  Pencil, QrCode, Radio, RefreshCw, Send, Server, Settings, ShieldCheck, Smartphone, Trash2, Upload, Users, X,
 } from 'lucide-react';
 
-type Tab = 'overview' | 'numbers' | 'slots' | 'queue' | 'settings';
+type Tab = 'overview' | 'numbers' | 'slots' | 'queue' | 'content' | 'settings';
 type Profile = 'light' | 'moderate' | 'intensive' | 'aggressive';
 
 interface WarmNumber {
@@ -22,6 +22,8 @@ interface WarmSlot {
   durationDays: 7 | 14 | 30;
 }
 interface EventItem { _id: string; title: string; detail?: string; level: string; createdAt: string; type: string; }
+type ContentKind = 'text' | 'audio' | 'image' | 'video' | 'sticker';
+interface ContentItem { _id: string; label: string; kind: ContentKind; text?: string; url?: string; mimeType?: string; fileName?: string; usageCount: number; active: boolean; }
 interface Dashboard {
   metrics: Record<string, number>; numbers: WarmNumber[]; slots: WarmSlot[];
   events: EventItem[]; queue: Record<string, number>; queuePaused: boolean;
@@ -127,6 +129,7 @@ export default function App() {
     { id: 'numbers', label: 'Números', icon: Smartphone },
     { id: 'slots', label: 'Slots', icon: Users },
     { id: 'queue', label: 'Fila', icon: Inbox },
+    { id: 'content', label: 'Conteúdo', icon: Library },
     { id: 'settings', label: 'Configurações', icon: Settings },
   ];
   const connectedPercent = dashboard?.metrics.totalNumbers ? Math.round((dashboard.metrics.connected / dashboard.metrics.totalNumbers) * 100) : 0;
@@ -169,6 +172,8 @@ export default function App() {
 
         {tab === 'queue' && <section className="panel full"><div className="panel-head"><div><p className="eyebrow">FILA DURÁVEL</p><h3>Próximos envios e histórico</h3><p className="panel-subtitle">Jobs persistidos no MongoDB, com idempotência e retry controlado.</p></div><div className="queue-summary"><span><i className="queued" />{dashboard.metrics.queued} aguardando</span><span><i className="failed" />{dashboard.metrics.failed} falhas</span></div></div><div className="table-wrap"><table><thead><tr><th>Horário</th><th>Origem</th><th>Destino</th><th>Mensagem</th><th>Status</th><th>Tentativas</th></tr></thead><tbody>{queueJobs.map((job) => <tr key={job._id}><td>{new Date(job.runAt).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}</td><td>{job.senderNumberId?.name || '—'}</td><td>{job.recipientNumberId?.name || '—'}</td><td className="message-cell">{job.text}</td><td><StatusPill status={job.status} /></td><td>{job.attempts}</td></tr>)}</tbody></table>{!queueJobs.length && <Empty icon={Inbox} title="Fila vazia" text="Os jobs aparecem quando um slot ativo é planejado." />}</div>{queueJobs.length > 0 && <div className="load-more-row"><span>Exibindo {queueJobs.length} de {queueMeta.total} jobs</span>{queueMeta.hasMore && <button className="secondary-button" onClick={loadMoreQueue} disabled={busy === 'queue-more'}>{busy === 'queue-more' ? <Loader2 className="spin" size={15} /> : <Plus size={15} />}Carregar mais 10</button>}</div>}</section>}
 
+        {tab === 'content' && <ContentPanel busy={busy} run={run} />}
+
         {tab === 'settings' && config && <SettingsPanel config={config} busy={busy} run={run} />}
       </div>}
     </main>
@@ -205,7 +210,7 @@ function AgendaModal({ slot, onClose }: { slot: WarmSlot; onClose: () => void })
     api<any>(`/api/slots/${slot._id}/agenda?limit=100`).then(setAgenda).catch((reason) => setError(reason.message));
   }, [slot._id]);
   const days = agenda?.days || [];
-  return <Modal title={`Roadmap · ${slot.name}`} onClose={onClose}><div className="agenda-modal"><p className="panel-subtitle">Visão completa do cronograma. Cada coluna representa um dia de 24 horas a partir do instante em que o slot foi iniciado.</p>{error && <p className="inline-error">{error}</p>}{!agenda && !error && <div className="loading-state"><Loader2 className="spin" size={20} />Montando roadmap…</div>}{agenda && !days.length && <Empty icon={CalendarDays} title="Roadmap sem números" text="Adicione números ao slot para visualizar os envios." />}{days.length > 0 && <div className="roadmap-grid">{days.map((day: any) => <section className={`roadmap-day ${day.status}`} key={day.day}><div className="roadmap-day-head"><div><span> DIA {day.day}</span><strong>{new Date(day.date).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}</strong></div><div><b>{day.totalMessages}</b><small>mensagens</small></div></div><p className="roadmap-limit">Até {day.limitPerNumber} por número · {day.status === 'current' ? 'em andamento' : day.status === 'completed' ? 'concluído' : 'programado'}</p><div className="roadmap-messages">{day.messages.map((message: any, index: number) => <div className="roadmap-message" key={`${day.day}-${index}`}><time>{new Date(message.runAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</time><div><strong>{message.sender.name} → {message.recipient.name}</strong><p>{message.text}</p></div></div>)}</div></section>)}</div>}</div></Modal>;
+  return <Modal title={`Roadmap · ${slot.name}`} onClose={onClose}><div className="agenda-modal"><p className="panel-subtitle">Visão completa do cronograma. Cada coluna representa um dia de 24 horas a partir do instante em que o slot foi iniciado.</p>{error && <p className="inline-error">{error}</p>}{!agenda && !error && <div className="loading-state"><Loader2 className="spin" size={20} />Montando roadmap…</div>}{agenda && !days.length && <Empty icon={CalendarDays} title="Roadmap sem números" text="Adicione números ao slot para visualizar os envios." />}{days.length > 0 && <div className="roadmap-grid">{days.map((day: any) => <section className={`roadmap-day ${day.status}`} key={day.day}><div className="roadmap-day-head"><div><span> DIA {day.day}</span><strong>{new Date(day.date).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}</strong></div><div><b>{day.totalMessages}</b><small>mensagens</small></div></div><p className="roadmap-limit">Até {day.limitPerNumber} por número · {day.status === 'current' ? 'em andamento' : day.status === 'completed' ? 'concluído' : 'programado'}</p><div className="roadmap-messages">{day.messages.map((message: any, index: number) => <div className="roadmap-message" key={`${day.day}-${index}`}><time>{new Date(message.runAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</time><div><strong>{message.sender.name} → {message.recipient.name} · {message.kind}</strong><p>{message.kind === 'text' ? message.text : message.contentLabel || 'Mídia da biblioteca'}</p></div></div>)}</div></section>)}</div>}</div></Modal>;
 }
 
 function NumberModal({ busy, onClose, onCreate }: { busy: string; onClose: () => void; onCreate: (payload: any) => void }) {
@@ -226,6 +231,31 @@ function EditNumberModal({ number, busy, onClose, onSave }: { number: WarmNumber
 function EditSlotModal({ slot, busy, onClose, onSave }: { slot: WarmSlot; busy: string; onClose: () => void; onSave: (payload: any) => void }) {
   const [name, setName] = useState(slot.name); const [profile, setProfile] = useState<Profile>(slot.profile); const [durationDays, setDurationDays] = useState<7 | 14 | 30>(slot.durationDays || 7);
   return <Modal title="Editar slot" onClose={onClose}><form className="form" onSubmit={(event) => { event.preventDefault(); onSave({ name, profile, durationDays }); }}><label>Nome do slot<input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Intensidade<select value={profile} onChange={(event) => setProfile(event.target.value as Profile)}><option value="light">Leve · crescimento gradual</option><option value="moderate">Moderado · ritmo intermediário</option><option value="intensive">Intenso controlado · limite maior</option><option value="aggressive">Agressivo controlado · até 48/dia</option></select></label><label>Cronograma<select value={durationDays} onChange={(event) => setDurationDays(Number(event.target.value) as 7 | 14 | 30)}><option value={7}>7 dias · recomendado</option><option value={14}>14 dias · gradual</option><option value={30}>30 dias · conservador</option></select></label><div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={busy === `edit-slot-${slot._id}`}>{busy === `edit-slot-${slot._id}` && <Loader2 className="spin" size={16} />}Salvar alterações</button></div></form></Modal>;
+}
+
+function ContentPanel({ busy, run }: { busy: string; run: any }) {
+  const [items, setItems] = useState<ContentItem[]>([]);
+  const [kind, setKind] = useState<ContentKind>('text');
+  const [label, setLabel] = useState('');
+  const [text, setText] = useState('');
+  const [url, setUrl] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const load = () => api<ContentItem[]>('/api/content').then(setItems).catch(() => undefined);
+  useEffect(() => { void load(); }, []);
+  const createRemote = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const result = await run('content-create', () => api('/api/content', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, label, text, url }) }), 'Conteúdo adicionado.');
+    if (result) { setLabel(''); setText(''); setUrl(''); await load(); }
+  };
+  const upload = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!file) return;
+    const body = new FormData(); body.append('kind', kind); body.append('label', label); body.append('file', file);
+    const result = await run('content-upload', () => api('/api/content/upload', { method: 'POST', body }), 'Arquivo adicionado.');
+    if (result) { setLabel(''); setFile(null); await load(); }
+  };
+  const kindLabel: Record<ContentKind, string> = { text: 'Texto', audio: 'Áudio', image: 'Imagem', video: 'Vídeo', sticker: 'Figurinha' };
+  return <section className="panel full content-panel"><div className="panel-head"><div><p className="eyebrow">BIBLIOTECA DE AQUECIMENTO</p><h3>Conteúdo e mídias</h3><p className="panel-subtitle">O scheduler mistura texto, áudio, imagem, vídeo e figurinha conforme o dia do perfil, com fallback para texto quando não houver mídia.</p></div><Library size={19} /></div><div className="content-forms"><form className="form content-form" onSubmit={createRemote}><h4>Adicionar por URL ou texto</h4><label>Tipo<select value={kind} onChange={(event) => setKind(event.target.value as ContentKind)}>{Object.entries(kindLabel).map(([value, labelValue]) => <option value={value} key={value}>{labelValue}</option>)}</select></label><label>Nome<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Ex.: Foto do produto 01" required /></label>{kind === 'text' ? <label>Texto<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Mensagem usada nas conversas" required /></label> : <label>URL pública HTTPS<input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://cdn.seudominio.com/midia.jpg" required /></label>}<button className="primary-button" disabled={busy === 'content-create'}>{busy === 'content-create' ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}Adicionar conteúdo</button></form><form className="form content-form" onSubmit={upload}><h4>Enviar arquivo</h4><label>Tipo de mídia<select value={kind === 'text' ? 'image' : kind} onChange={(event) => setKind(event.target.value as ContentKind)}><option value="image">Imagem</option><option value="video">Vídeo</option><option value="audio">Áudio</option><option value="sticker">Figurinha</option></select></label><label>Nome<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Ex.: Áudio conversa 01" required /></label><label className="file-input">Arquivo<input type="file" accept="image/*,video/*,audio/*" onChange={(event) => setFile(event.target.files?.[0] || null)} required /></label><small>O arquivo precisa ficar acessível pela URL pública do aquecedor para a UazAPI baixá-lo.</small><button className="secondary-button" disabled={!file || busy === 'content-upload'}>{busy === 'content-upload' ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}Enviar para biblioteca</button></form></div><div className="content-grid">{items.map((item) => <article className="content-card" key={item._id}><div className="content-card-head"><span className={`content-kind ${item.kind}`}>{kindLabel[item.kind]}</span><button className="icon-button danger" title="Remover conteúdo" onClick={() => { if (window.confirm(`Remover ${item.label}?`)) void run(`content-delete-${item._id}`, () => api(`/api/content/${item._id}`, { method: 'DELETE' }), 'Conteúdo removido.').then(load); }}><Trash2 size={15} /></button></div><h4>{item.label}</h4>{item.kind === 'text' ? <p>{item.text}</p> : <a href={item.url} target="_blank" rel="noreferrer">{item.fileName || item.url}</a>}<small>{item.usageCount || 0} usos · {item.active ? 'ativo' : 'pausado'}</small></article>)}{!items.length && <Empty icon={Library} title="Biblioteca vazia" text="Adicione textos ou mídias para o scheduler poder variar as ações." />}</div></section>;
 }
 
 function SettingsPanel({ config, busy, run }: { config: Config; busy: string; run: any }) {

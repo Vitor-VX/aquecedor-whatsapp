@@ -14,6 +14,7 @@ Painel independente para aquecimento controlado de números próprios ou autoriz
 - Perfis de aquecimento: **Leve**, **Moderado**, **Intenso controlado** e **Agressivo controlado**.
 - Cronogramas de **7 dias (recomendado)**, **14 dias** ou **30 dias**.
 - Crescimento gradual do limite diário conforme o cronograma escolhido.
+- Biblioteca de conteúdo com texto, áudio, imagem, vídeo e figurinha; o scheduler escolhe o tipo por faixa do plano e usa fallback de texto quando não há mídia disponível.
 - Fila durável em MongoDB, com integração opcional RabbitMQ, idempotência por dia do plano, concorrência limitada e retries controlados.
 - Pausa global, pausa por slot e horário de descanso.
 - Webhook assíncrono para conexão, mensagens recebidas e métricas.
@@ -103,6 +104,10 @@ Um slot ativo não pode ter o cronograma alterado. Pause o slot antes de editar 
 - GET /api/health — saúde da aplicação e conexão MongoDB.
 - GET /api/dashboard — métricas, números, slots e eventos.
 - POST /api/numbers — cria instância e inicia conexão.
+- GET /api/content — lista a biblioteca de conteúdo.
+- POST /api/content — adiciona texto ou URL pública de mídia.
+- POST /api/content/upload — envia arquivo de mídia para `uploads/`.
+- DELETE /api/content/:id — remove um item da biblioteca.
 - PATCH /api/numbers/:id — altera o nome exibido do número.
 - GET /api/numbers/:id/status — consulta status na UazAPI.
 - POST /api/numbers/:id/connect — gera nova conexão/QR Code.

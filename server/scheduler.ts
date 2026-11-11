@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import {
   AppConfig,
+  WarmupContent,
   WarmupEvent,
   WarmupJob,
   WarmupNumber,
@@ -10,7 +11,7 @@ import {
   getOrCreateConfig,
 } from './models.js';
 import { secretFingerprint } from './crypto.js';
-import { MESSAGE_TEMPLATES, dailyLimit, dayOfPlan, progressPercent, scheduleTimesForPlanDay } from './plans.js';
+import { MESSAGE_TEMPLATES, actionKindForDay, dailyLimit, dayOfPlan, progressPercent, scheduleTimesForPlanDay, type WarmupActionKind } from './plans.js';
 import { publishWarmupJob, rabbitConfigured, startRabbitConsumer } from './rabbitmq.js';
 import { UazapiError, uazapi } from './uazapi.js';
 
@@ -63,6 +64,8 @@ export async function ensureJobsForToday() {
     const config = await getOrCreateConfig();
     const activeStart = config.quietEndHour;
     const activeEnd = config.quietStartHour;
+    const content = await WarmupContent.find({ active: true }).sort({ lastUsedAt: 1, createdAt: 1 }).lean();
+    const availableKinds = Array.from(new Set<WarmupActionKind>(['text', ...content.filter((item) => item.kind !== 'text' && item.url).map((item) => item.kind as Exclude<WarmupActionKind, 'text'>)]));
 
     for (let senderIndex = 0; senderIndex < numbers.length; senderIndex++) {
       const sender = numbers[senderIndex];
@@ -73,6 +76,9 @@ export async function ensureJobsForToday() {
         const recipient = numbers[(senderIndex + index + 1) % numbers.length];
         if (recipient._id.equals(sender._id)) continue;
         const idempotencyKey = `${slot._id}:day-${planDay}:${sender._id}:${index}`;
+        const kind = actionKindForDay(planDay, senderIndex + index, availableKinds);
+        const pool = content.filter((item) => item.kind === kind && (kind === 'text' ? item.text : item.url));
+        const selected = pool.length ? pool[(senderIndex + index + planDay) % pool.length] : undefined;
         await WarmupJob.updateOne(
           { idempotencyKey },
           {
@@ -81,8 +87,11 @@ export async function ensureJobsForToday() {
               slotId: slot._id,
               senderNumberId: sender._id,
               recipientNumberId: recipient._id,
-              kind: 'text',
-              text: MESSAGE_TEMPLATES[(senderIndex + index + planDay) % MESSAGE_TEMPLATES.length],
+              kind,
+              text: selected?.text || (kind === 'text' ? MESSAGE_TEMPLATES[(senderIndex + index + planDay) % MESSAGE_TEMPLATES.length] : ''),
+              contentId: selected?._id,
+              mediaUrl: selected?.url,
+              mediaMimeType: selected?.mimeType,
               runAt: times[index],
               status: 'queued',
               attempts: 0,
@@ -140,7 +149,11 @@ async function processJob(jobId?: string) {
     return;
   }
   try {
-    const result = await uazapi.sendText(sender, recipient.phoneNumber, job.text);
+    const result = job.kind === 'text'
+      ? await uazapi.sendText(sender, recipient.phoneNumber, job.text)
+      : job.mediaUrl
+        ? await uazapi.sendMedia(sender, recipient.phoneNumber, job.kind, job.mediaUrl, job.text)
+        : await uazapi.sendText(sender, recipient.phoneNumber, job.text || MESSAGE_TEMPLATES[0]);
     job.status = 'completed';
     job.providerMessageId = String(result.messageid || result.id || result.message?.id || '');
     job.finishedAt = new Date();

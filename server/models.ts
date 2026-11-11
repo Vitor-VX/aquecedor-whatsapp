@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { WarmupDuration, WarmupProfile } from './plans.js';
+import type { WarmupActionKind, WarmupDuration, WarmupProfile } from './plans.js';
 
 export type NumberState = 'disconnected' | 'connecting' | 'connected' | 'hibernated' | 'error';
 export type WarmupState = 'draft' | 'warming' | 'paused' | 'ready' | 'attention';
@@ -55,8 +55,11 @@ export interface WarmupJobDocument {
   slotId: mongoose.Types.ObjectId;
   senderNumberId: mongoose.Types.ObjectId;
   recipientNumberId: mongoose.Types.ObjectId;
-  kind: 'text';
+  kind: WarmupActionKind;
   text: string;
+  contentId?: mongoose.Types.ObjectId;
+  mediaUrl?: string;
+  mediaMimeType?: string;
   runAt: Date;
   status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'uncertain';
   attempts: number;
@@ -65,6 +68,18 @@ export interface WarmupJobDocument {
   finishedAt?: Date;
   providerMessageId?: string;
   error?: string;
+}
+
+export interface WarmupContentDocument {
+  label: string;
+  kind: WarmupActionKind;
+  text?: string;
+  url?: string;
+  mimeType?: string;
+  fileName?: string;
+  active: boolean;
+  usageCount: number;
+  lastUsedAt?: Date;
 }
 
 const appConfigSchema = new Schema<AppConfigDocument>({
@@ -119,7 +134,10 @@ const warmupJobSchema = new Schema<WarmupJobDocument>({
   senderNumberId: { type: Schema.Types.ObjectId, ref: 'WarmupNumber', required: true, index: true },
   recipientNumberId: { type: Schema.Types.ObjectId, ref: 'WarmupNumber', required: true },
   kind: { type: String, default: 'text' },
-  text: { type: String, required: true },
+  text: { type: String, default: '' },
+  contentId: { type: Schema.Types.ObjectId, ref: 'WarmupContent', index: true },
+  mediaUrl: String,
+  mediaMimeType: String,
   runAt: { type: Date, required: true, index: true },
   status: { type: String, default: 'queued', index: true },
   attempts: { type: Number, default: 0 },
@@ -130,6 +148,18 @@ const warmupJobSchema = new Schema<WarmupJobDocument>({
   error: String,
 }, { timestamps: true, collection: 'warmer_jobs' });
 warmupJobSchema.index({ status: 1, runAt: 1 });
+
+const warmupContentSchema = new Schema<WarmupContentDocument>({
+  label: { type: String, required: true, trim: true },
+  kind: { type: String, required: true, index: true },
+  text: String,
+  url: String,
+  mimeType: String,
+  fileName: String,
+  active: { type: Boolean, default: true, index: true },
+  usageCount: { type: Number, default: 0 },
+  lastUsedAt: Date,
+}, { timestamps: true, collection: 'warmer_content' });
 
 const warmupEventSchema = new Schema({
   type: { type: String, required: true, index: true },
@@ -157,6 +187,7 @@ export const AppConfig = mongoose.model<AppConfigDocument>('WarmerConfig', appCo
 export const WarmupNumber = mongoose.model<WarmupNumberDocument>('WarmupNumber', warmupNumberSchema);
 export const WarmupSlot = mongoose.model<WarmupSlotDocument>('WarmupSlot', warmupSlotSchema);
 export const WarmupJob = mongoose.model<WarmupJobDocument>('WarmupJob', warmupJobSchema);
+export const WarmupContent = mongoose.model<WarmupContentDocument>('WarmupContent', warmupContentSchema);
 export const WarmupEvent = mongoose.model('WarmupEvent', warmupEventSchema);
 export const WebhookInbox = mongoose.model('WebhookInbox', webhookInboxSchema);
 

@@ -1,10 +1,14 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import mongoose from 'mongoose';
+import multer from 'multer';
 import {
   AppConfig,
+  WarmupContent,
   WarmupEvent,
   WarmupJob,
   WarmupNumber,
@@ -13,20 +17,33 @@ import {
   getOrCreateConfig,
 } from './models.js';
 import { decryptSecret, encryptSecret, secretFingerprint } from './crypto.js';
-import { DAILY_LIMITS, MESSAGE_TEMPLATES, PLAN_DURATIONS, PROFILE_LABELS, dailyLimit, healthLabel, healthScore, normalizeDuration, progressPercent, scheduleTimesForPlanDay, type WarmupProfile } from './plans.js';
+import { DAILY_LIMITS, MESSAGE_TEMPLATES, PLAN_DURATIONS, PROFILE_LABELS, actionKindForDay, dailyLimit, healthLabel, healthScore, normalizeDuration, progressPercent, scheduleTimesForPlanDay, type WarmupActionKind, type WarmupProfile } from './plans.js';
 import { enqueueWebhook, ensureJobsForToday, refreshNumberStatus, startWorkers } from './scheduler.js';
+import { runMigrations } from './migrations.js';
 import { rabbitConfigured } from './rabbitmq.js';
 import { UazapiError, uazapi } from './uazapi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
+const uploadRoot = path.join(projectRoot, 'uploads');
+fs.mkdirSync(uploadRoot, { recursive: true });
 const port = Number(process.env.PORT || 3100);
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
+app.use('/uploads', express.static(uploadRoot));
 
 const isProfile = (value: unknown): value is WarmupProfile => ['light', 'moderate', 'intensive', 'aggressive'].includes(String(value));
+const isActionKind = (value: unknown): value is WarmupActionKind => ['text', 'audio', 'image', 'video', 'sticker'].includes(String(value));
 const normalizeOrigin = (value: string) => value.trim().replace(/\/$/, '');
+const mediaUpload = multer({
+  storage: multer.diskStorage({
+    destination: uploadRoot,
+    filename: (_req, file, callback) => callback(null, `${crypto.randomUUID()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
+  }),
+  limits: { fileSize: 75 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => callback(null, /^(image|video|audio)\//i.test(file.mimetype) || file.mimetype === 'image/webp'),
+});
 
 function asyncRoute(handler: (req: Request, res: Response) => Promise<unknown>) {
   return (req: Request, res: Response, next: NextFunction) => { void handler(req, res).catch(next); };
@@ -118,6 +135,41 @@ app.get('/api/dashboard', asyncRoute(async (_req, res) => {
 app.get('/api/numbers', asyncRoute(async (_req, res) => {
   const numbers = await WarmupNumber.find().sort({ createdAt: -1 });
   res.json(numbers.map(safeNumber));
+}));
+
+app.get('/api/content', asyncRoute(async (req, res) => {
+  const query: Record<string, unknown> = {};
+  if (isActionKind(req.query.kind)) query.kind = req.query.kind;
+  res.json(await WarmupContent.find(query).sort({ lastUsedAt: 1, createdAt: -1 }).lean());
+}));
+
+app.post('/api/content', asyncRoute(async (req, res) => {
+  const kind = isActionKind(req.body.kind) ? req.body.kind : null;
+  const label = String(req.body.label || '').trim();
+  const text = String(req.body.text || '').trim();
+  const url = String(req.body.url || '').trim();
+  if (!kind || !label) return res.status(400).json({ error: 'Informe o tipo e o nome do conteúdo.' });
+  if (kind === 'text' && !text) return res.status(400).json({ error: 'Informe o texto do conteúdo.' });
+  if (kind !== 'text' && !/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'A mídia precisa de uma URL HTTPS pública.' });
+  const content = await WarmupContent.create({ label, kind, text: kind === 'text' ? text : undefined, url: kind === 'text' ? undefined : url, active: true });
+  res.status(201).json({ success: true, content, message: 'Conteúdo adicionado à biblioteca.' });
+}));
+
+app.post('/api/content/upload', mediaUpload.single('file'), asyncRoute(async (req, res) => {
+  const kind = isActionKind(req.body.kind) ? req.body.kind : null;
+  const label = String(req.body.label || '').trim();
+  if (!kind || kind === 'text' || !label || !req.file) return res.status(400).json({ error: 'Envie nome, tipo de mídia e arquivo.' });
+  const config = await getOrCreateConfig();
+  const origin = normalizeOrigin(config.publicBaseUrl || process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`);
+  const url = `${origin}/uploads/${encodeURIComponent(req.file.filename)}`;
+  const content = await WarmupContent.create({ label, kind, url, mimeType: req.file.mimetype, fileName: req.file.originalname, active: true });
+  res.status(201).json({ success: true, content, message: 'Arquivo enviado para a biblioteca.' });
+}));
+
+app.delete('/api/content/:id', asyncRoute(async (req, res) => {
+  const content = await WarmupContent.findByIdAndDelete(req.params.id);
+  if (!content) return res.status(404).json({ error: 'Conteúdo não encontrado.' });
+  res.json({ success: true, message: 'Conteúdo removido.' });
 }));
 
 app.post('/api/numbers', asyncRoute(async (req, res) => {
@@ -291,7 +343,7 @@ app.get('/api/slots/:id/agenda', asyncRoute(async (req, res) => {
   const slot = await WarmupSlot.findById(req.params.id).select('name profile status durationDays startedAt numberIds');
   if (!slot) return res.status(404).json({ error: 'Slot não encontrado.' });
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 100)));
-  const [jobs, numbers, config] = await Promise.all([
+  const [jobs, numbers, config, content] = await Promise.all([
     WarmupJob.find({ slotId: slot._id })
     .sort({ runAt: 1 })
     .limit(limit)
@@ -300,26 +352,34 @@ app.get('/api/slots/:id/agenda', asyncRoute(async (req, res) => {
     .lean(),
     WarmupNumber.find({ _id: { $in: slot.numberIds } }).select('name phoneNumber').lean(),
     getOrCreateConfig(),
+    WarmupContent.find({ active: true }).sort({ lastUsedAt: 1, createdAt: 1 }).lean(),
   ]);
   const durationDays = slot.durationDays || 7;
   const planStartedAt = slot.startedAt || new Date();
   const now = new Date();
+  const availableKinds = Array.from(new Set<WarmupActionKind>(['text', ...content.filter((item) => item.kind !== 'text' && item.url).map((item) => item.kind as Exclude<WarmupActionKind, 'text'>)]));
   const days = Array.from({ length: durationDays }, (_, dayIndex) => {
     const day = dayIndex + 1;
     const dayStart = new Date(new Date(planStartedAt).getTime() + (dayIndex * 86_400_000));
     const dayEnd = new Date(dayStart.getTime() + 86_400_000);
     const dayNow = now >= dayStart && now < dayEnd ? now : dayStart;
-    const plannedMessages: Array<{ sender: any; recipient: any; text: string; runAt: string }> = [];
+    const plannedMessages: Array<{ sender: any; recipient: any; kind: WarmupActionKind; text: string; mediaUrl?: string; contentLabel?: string; runAt: string }> = [];
     const cap = dailyLimit(slot.profile, day, durationDays);
     numbers.forEach((sender, senderIndex) => {
       const senderTimes = scheduleTimesForPlanDay(cap, planStartedAt, day, config.quietEndHour, config.quietStartHour, dayNow);
       for (let index = 0; index < cap; index += 1) {
         const recipient = numbers[(senderIndex + index + 1) % numbers.length];
         if (!recipient || recipient._id.equals(sender._id)) continue;
+        const kind = actionKindForDay(day, senderIndex + index, availableKinds);
+        const pool = content.filter((item) => item.kind === kind && (kind === 'text' ? item.text : item.url));
+        const selected = pool.length ? pool[(senderIndex + index + day) % pool.length] : undefined;
         plannedMessages.push({
           sender: { _id: sender._id, name: sender.name, phoneNumber: sender.phoneNumber },
           recipient: { _id: recipient._id, name: recipient.name, phoneNumber: recipient.phoneNumber },
-          text: MESSAGE_TEMPLATES[(senderIndex + index + day) % MESSAGE_TEMPLATES.length],
+          kind,
+          text: selected?.text || (kind === 'text' ? MESSAGE_TEMPLATES[(senderIndex + index + day) % MESSAGE_TEMPLATES.length] : ''),
+          mediaUrl: selected?.url,
+          contentLabel: selected?.label,
           runAt: senderTimes[index]?.toISOString() || dayStart.toISOString(),
         });
       }
@@ -367,6 +427,7 @@ app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
 
 async function bootstrap() {
   await connectDatabase();
+  await runMigrations();
   await getOrCreateConfig();
   startWorkers();
 
